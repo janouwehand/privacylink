@@ -1,0 +1,31 @@
+<section class="hero compact">
+  <div class="eyebrow">{{ language.t('statsEyebrow') }}</div>
+  <h1 id="page-title" tabindex="-1">{{ language.t('statsTitle') }}</h1>
+  <p>{{ language.t('statsIntro') }}</p>
+</section>
+
+<section class="statistics-content" aria-live="polite" [attr.aria-busy]="loading()">
+  @if (loading()) {
+    <p class="statistics-state">{{ language.t('statsLoading') }}</p>
+  } @else if (failed()) {
+    <p class="statistics-state" role="alert">{{ language.t('statsFailure') }}</p>
+  } @else if (totals().length === 0) {
+    <p class="statistics-state">{{ language.t('statsEmpty') }}</p>
+  } @else {
+    <div class="statistics-table-wrap">
+      <table class="statistics-table">
+        <thead><tr><th scope="col">{{ language.t('statsColumnMetric') }}</th><th scope="col">{{ language.t('statsColumnCount') }}</th><th scope="col">{{ language.t('statsColumnBytes') }}</th></tr></thead>
+        <tbody>
+          @for (row of totals(); track row.metric + ':' + row.dimension + ':' + row.dimensionValue) {
+            <tr>
+              <th scope="row">{{ metricLabel(row.metric) }}<span class="statistics-dimension">{{ dimensionLabel(row) }}</span></th>
+              <td>{{ language.formatNumber(row.count) }}</td>
+              <td>{{ row.bytes ? formatBytes(row.bytes) : '—' }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+    <p class="statistics-note">{{ language.t('statsNote') }}</p>
+  }
+</section>

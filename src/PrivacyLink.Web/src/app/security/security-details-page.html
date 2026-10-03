@@ -1,0 +1,15 @@
+<section class="hero compact">
+  <div class="eyebrow">{{ content[language.lang()].eyebrow }}</div>
+  <h1 id="page-title" tabindex="-1">{{ content[language.lang()].title }}</h1>
+  <p>{{ content[language.lang()].intro }}</p>
+</section>
+<section class="security-page-content security-engineering-content">
+  @for (section of content[language.lang()].sections; track section.title) {
+    <article class="security-engineering-section">
+      <h2>{{ section.title }}</h2>
+      @for (paragraph of section.paragraphs; track paragraph) { <p>{{ paragraph }}</p> }
+      @if (section.bullets) { <ul>@for (bullet of section.bullets; track bullet) { <li>{{ bullet }}</li> }</ul> }
+    </article>
+  }
+  <a class="primary security-back-action" routerLink="/security">{{ content[language.lang()].back }}</a>
+</section>

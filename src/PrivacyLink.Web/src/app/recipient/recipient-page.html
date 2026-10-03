@@ -1,0 +1,55 @@
+<section class="hero compact recipient-hero" [class.opened-recipient-hero]="recipient.opened()">
+  @if (recipient.opened()) {
+    <div class="eyebrow">{{ language.t('openedEyebrow') }}</div>
+    <h1 #openedPageTitle id="page-title" tabindex="-1">{{ language.t('openedContentTitle') }}</h1>
+  } @else {
+    <div class="eyebrow">{{ language.t('receivedEyebrow') }}</div>
+    <h1 id="page-title" tabindex="-1">{{ language.t('received') }}</h1>
+    <p>{{ language.t('receivedIntro') }}</p>
+  }
+</section>
+
+<section class="card recipient-card" [class.opened-recipient-card]="recipient.opened()">
+  @if (recipient.loadingMetadata()) {
+    <p>{{ language.t('loading') }}</p>
+  } @else if (recipient.metadataReady()) {
+    <p class="recipient-expiry">{{ language.t('expires') }} {{ recipient.expiresAt() | date:'medium':undefined:language.dateLocale() }}</p>
+
+    @if (!recipient.opened()) {
+      @if (recipient.metadataFileCount()) { <p class="field-note">{{ recipient.metadataFileCount() }} {{ language.t('files') }}</p> }
+      <p class="field-note trust-note">{{ language.t('trustReminder') }}</p>
+      @if (recipient.passwordProtected()) {
+        <label for="unlock-password">{{ language.t('unlockLabel') }}</label>
+        <input #unlockPasswordInput id="unlock-password" type="password" autocomplete="off" [value]="recipient.unlockPassword()" (input)="recipient.updateUnlockPassword($event)" (keydown.enter)="openRecipient()" [disabled]="recipient.busy() || recipient.lockoutSeconds() > 0">
+        <p class="field-note unlock-note">{{ language.t('unlockPrompt') }}</p>
+        @if (recipient.error().length) { <p class="error" role="alert">{{ recipient.errorText() }}</p> }
+        @if (recipient.lockoutSeconds() > 0) { <p class="field-note" aria-live="off">{{ language.t('rateLimitedCountdown', { time: recipient.countdownText() }) }}</p> }
+      }
+      <button class="primary" type="button" [disabled]="recipient.busy() || recipient.lockoutSeconds() > 0 || (recipient.passwordProtected() && !recipient.unlockPassword())" (click)="openRecipient()">{{ recipient.busy() ? (recipient.passwordProtected() ? language.t('unlocking') : language.t('opening')) : recipient.lockoutSeconds() > 0 ? language.t('waiting') : language.t('open') }}</button>
+      @if (!recipient.passwordProtected() && recipient.error().length) { <p class="error" role="alert">{{ recipient.errorText() }}</p> }
+    } @else {
+      <div class="opened-content-grid" [class.has-message]="!!recipient.openedMessage()" [class.has-files]="recipient.metadataFiles().length > 0">
+        @if (recipient.openedMessage()) {
+          <section class="opened-message-section">
+            <h2>{{ language.t('decryptedMessage') }}</h2>
+            <pre class="message-display">{{ recipient.openedMessage() }}</pre>
+          </section>
+        }
+        @if (recipient.metadataFiles().length) {
+          <section class="opened-files-section">
+            <h2>{{ language.t('files') }} ({{ recipient.metadataFiles().length }})</h2>
+            <ul class="download-list">
+              @for (file of recipient.metadataFiles(); track file.id) {
+                <li>
+                  <span class="download-file-info"><span class="download-file-name">{{ file.name }}</span><span class="download-file-size">{{ recipient.formatFileSize(file.size) }}</span></span>
+                  <button class="secondary download-button" type="button" (click)="recipient.download(file)">{{ language.t('download') }}</button>
+                </li>
+              }
+            </ul>
+          </section>
+        }
+      </div>
+    }
+  }
+  @if (recipient.opened() && recipient.error().length) { <p class="error" role="alert">{{ recipient.errorText() }}</p> }
+</section>

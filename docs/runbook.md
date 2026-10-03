@@ -1,0 +1,62 @@
+# Production Runbook
+
+This document describes the current operational baseline for PrivacyLink. Validate deployment-specific settings and procedures in the target environment.
+
+## Configuration and secrets
+
+- Set `ASPNETCORE_ENVIRONMENT=Production`.
+- For a host that does not use Compose, provide `ConnectionStrings__PrivacyLink` and `Security__PasswordPepper` as environment variables; do not put these values in the repository. GitHub Actions can pass GitHub Secrets as environment variables through the `env` section. With Compose, the host provides `POSTGRES_PASSWORD` and `PRIVACYLINK_PASSWORD_PEPPER` to Compose; Compose mounts them as secret files and passes only the file paths to the API.
+- Set `Security__SecretStore__Provider=Environment`. The API reads the pepper from ASP.NET Environment configuration; with Compose, it first reads the pepper from the mounted secret file. There is no Azure Key Vault or Kubernetes integration. In Development, production validation is disabled and `appsettings.Development.json` provides the local development pepper.
+- Configure separate random Base64 secrets for `Security__AuditHashKey` and `Analytics__Key` (at least 32 bytes each); do not reuse the password pepper for either. With Compose, set `PRIVACYLINK_AUDIT_HASH_KEY` and `PRIVACYLINK_ANALYTICS_KEY`; both are mounted as secret files. Statistics use a keyed HMAC of the client IP for daily unique-visitor counts; raw IP addresses are not stored in the statistics tables. These visitor HMAC rows have no cleanup and remain in the database indefinitely, including in backups. Matching HMACs can be linked across days even without the key; the key also allows a holder to check a candidate IP against stored HMACs. Aggregated `stats_daily` rows older than 13 months are deleted.
+- Use an absolute `Storage__BlobPath` on durable storage that the service account can write to.
+- Compose accepts HTTP by default so local testing and a Caddy upstream over HTTP work. The published host port binds to `127.0.0.1` by default; route public access through Caddy and configure trusted proxies only with your own proxy IP addresses. Set `PRIVACYLINK_REQUIRE_HTTPS=true` if the application itself must enforce HTTPS.
+- Restrict `AllowedHosts` to the public hostnames.
+
+## Health checks and incident triage
+
+- `/health` is a fast liveness probe with no dependency information.
+- `/health/ready` returns HTTP 200 with `{"status":"ready"}` when startup initialization has completed and PostgreSQL and the blob root are reachable. Otherwise, the probe returns HTTP 503 with `not_ready`; it does not expose dependency details. The checks run in parallel and have a two-second timeout.
+- In production, both health endpoints may be called over HTTP only from loopback. The Compose health check uses the Native AOT binary itself as the probe, without a shell or `curl` in the chiseled image. When `PRIVACYLINK_REQUIRE_HTTPS=true`, other HTTP requests are rejected; behind a TLS proxy, only a trusted proxy should supply `X-Forwarded-Proto`.
+- Application audit logs contain the operation, status, duration, and trace ID. When a valid `Security:AuditHashKey` is configured (required in Production), they also contain a truncated HMAC-SHA-256 of the client IP; without a valid key, the client field is `unavailable`. Request bodies, URL identifiers, keys, and passwords are not logged by the application.
+- For database problems, first check the connection string, network, and migration lock. Do not manually delete records or blobs.
+
+## Database and blobs
+
+- At startup, transactional schema migrations run under an advisory lock and are recorded in `schema_migrations`; migrations are idempotent.
+- The PostgreSQL image reads the database password from `POSTGRES_PASSWORD_FILE`; the API builds the Npgsql connection string using the mounted password secret. The Compose secret source `environment` is intended for Docker Compose, not `docker stack deploy`.
+- Cleanup deletes expired blobs before metadata and can be safely repeated. Temporary `.tmp-*` blobs are safely removed at startup.
+- Backups must include both PostgreSQL and `Storage__BlobPath`. Restoring only the database or only the blobs can break references.
+- After a restore, always run `scripts/reconcile-blobs.ps1`. It is a dry run by default; delete candidates only after separate operational approval.
+
+## Release gates
+
+```powershell
+dotnet restore PrivacyLink.slnx
+dotnet build PrivacyLink.slnx --no-restore
+dotnet test PrivacyLink.slnx --no-restore
+dotnet publish src/PrivacyLink.Api/PrivacyLink.Api.csproj -c Release -r win-x64 --self-contained true -p:PublishAot=true -p:PublishAotUsingRuntimePack=true
+pwsh -File scripts/verify-linux-container.ps1
+Push-Location src/PrivacyLink.Web
+npm ci
+npm test -- --no-watch --no-progress
+npm run build
+Pop-Location
+```
+
+On Windows systems where the Angular CLI crashes natively, use `npm run build:container`. This build runs the same production configuration in a temporary Linux container and writes the output to `.container-dist`.
+
+Run the local persistence smoke test with `powershell -File scripts/verify-persistence.ps1`. It starts a temporary PostgreSQL container, runs the actual API migrations and create flow, creates a PostgreSQL custom-format backup, restores it to a second database, and compares the blob backup using SHA-256. The test uses only temporary data and removes the container when finished.
+
+## Remaining blockers
+
+- This repository has no production PostgreSQL/blob environment or production backup/restore exercise with measured RPO/RTO; the local persistence smoke test is not a substitute for one.
+- `public/_headers` is a provider profile; the deployment environment must test the final reverse-proxy/CDN configuration.
+- No external load test or disaster-recovery evidence has been produced.
+
+## CI and release validation
+
+- `scripts/verify-release.ps1` runs restore, backend build and tests, Native AOT publishing, static-hosting validation, frontend tests, and the containerized production build. The script does not deploy anything.
+- `scripts/verify-linux-container.ps1` builds the Dockerfile for `linux-x64`, starts the production image with the in-memory development configuration, and waits for `/health`. The GitHub Actions workflow `.github/workflows/linux-aot-container.yml` runs this artifact check on pushes to `main` and pull requests targeting `main`; it then also starts the production Compose stack with temporary CI credentials and isolated volumes. `docker compose up --wait` waits for PostgreSQL health and API readiness through the built-in `--healthcheck` mode. The workflow removes the temporary containers and volumes afterwards.
+- The PostgreSQL/blob smoke test remains a local, temporary check; schedule a periodic restore exercise in the production environment and measure RPO/RTO.
+- `/health` is a liveness probe; `/health/ready` checks dependency readiness. Audit logging is privacy-preserving; monitor status codes, latency, and readiness failures through the host logging/metrics layer, and alert on sustained 5xx responses, 429 spikes, readiness 503 responses, and backup failures.
+- TLS termination must forward the original HTTPS scheme only through explicitly trusted proxy IP addresses. Validate HSTS, `X-Forwarded-*`, host allowlisting, and end-to-end HTTPS in the deployment environment.

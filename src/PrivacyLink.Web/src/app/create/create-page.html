@@ -1,0 +1,43 @@
+@if (app.mode() === 'result') {
+  <section class="hero compact"><div class="eyebrow">{{ language.t('readyEyebrow') }}</div><h1 id="page-title" tabindex="-1">{{ language.t('ready') }}</h1><p>{{ language.t('readyIntro') }}</p></section>
+  <section class="card"><label for="share-link">{{ language.t('secureLink') }}</label><input id="share-link" type="text" readonly [value]="create.shareLink()" (focus)="create.selectLink($event)"><div class="actions"><button class="primary" type="button" (click)="create.copy()">{{ create.copied() ? language.t('copied') : language.t('copy') }}</button>@if (create.canShare) { <button class="secondary" type="button" (click)="create.share()">{{ language.t('share') }}</button> }</div><p class="field-note">{{ language.t('expires') }} {{ create.expiresAt() | date:'medium':undefined:language.dateLocale() }}</p>@if (create.historyStorageWarning()) { <p class="error" role="alert">{{ language.t('historyPersistenceWarning') }}</p> }@if (create.error().length) { <p class="error" role="alert">{{ create.errorText() }}</p> }</section>
+  <button class="text-button" type="button" (click)="create.reset()">{{ language.t('createAnother') }}</button>
+} @else {
+  <section class="hero"><div class="eyebrow">{{ language.t('eyebrow') }}</div><h1 id="page-title" tabindex="-1">{{ language.t('heroBefore') }} <span class="hero-accent">{{ language.t('heroAccent') }}</span></h1></section>
+  <p class="security-summary">{{ language.t('securitySummary') }} <a class="text-link" routerLink="/security">{{ language.t('securityDetailsLink') }}</a></p>
+  <section class="card compose-card">
+    <div class="compose-layout">
+      <div class="form-field message-field">
+        <label for="message">{{ language.t('message') }}</label>
+        <textarea id="message" rows="8" [placeholder]="language.t('placeholder')" [value]="create.message()" (input)="create.updateMessage($event)" [disabled]="create.busy()"></textarea>
+        <div class="field-note"><span>{{ language.t('messageHint') }}</span><span>{{ create.formattedMessageCharacters() }} / {{ create.formattedMessageLimit() }} {{ language.t('characters') }}</span></div>
+      </div>
+      <div class="form-field file-field">
+        <label for="files">{{ language.t('files') }}</label>
+        <div class="file-dropzone" [class.is-dragging]="create.isDragging()" [class.has-files]="create.selectedFiles().length > 0" (dragenter)="create.onDragEnter($event)" (dragover)="create.onDragOver($event)" (dragleave)="create.onDragLeave($event)" (drop)="create.onDrop($event)" role="group" [attr.aria-label]="language.t('dropFiles')">
+          <input id="files" class="file-input" type="file" [attr.accept]="create.fileAccept()" multiple (change)="create.updateFiles($event)" [disabled]="create.busy()">
+          <div class="dropzone-content"><span class="upload-icon" aria-hidden="true">↑</span><strong>{{ language.t('dropFiles') }}</strong><span>{{ language.t('dropOr') }}</span><label class="file-button" for="files">{{ language.t('chooseFiles') }}</label></div>
+          @if (create.selectedFiles().length) { <ul class="file-list">@for (file of create.selectedFiles(); track $index) { <li><span>{{ file.name }} ({{ create.formatFileSize(file.size) }})</span><button class="remove-file" type="button" [attr.aria-label]="language.t('removeFileWithName', { name: file.name })" [title]="language.t('removeFile')" (click)="create.removeFile($index)" [disabled]="create.busy()">×</button></li> }</ul> }
+        </div>
+        <div class="field-note file-count" aria-live="polite"><span>{{ create.fileUsageSummary() }}</span><span class="file-limit-note">{{ create.fileLimitHint() }}</span></div>
+      </div>
+      <div class="link-settings">
+        <div class="form-field password-setting">
+          <label for="password">{{ language.t('optionalPassword') }}</label>
+          <div class="password-field">
+            <button class="password-action password-generate-action" type="button" (click)="create.openPasswordGenerator()" [disabled]="create.busy()" [attr.aria-label]="language.t('openPasswordGenerator')" [title]="language.t('openPasswordGenerator')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 19 9-9"></path><path d="m14 4 .8 2.2L17 7l-2.2.8L14 10l-.8-2.2L11 7l2.2-.8L14 4Z"></path><path d="m19 12 .6 1.7L21 14l-1.4.5L19 16l-.6-1.5L17 14l1.4-.3L19 12Z"></path><path d="m6 4 .5 1.5L8 6l-1.5.5L6 8l-.5-1.5L4 6l1.5-.5L6 4Z"></path></svg></button>
+            <input id="password" [type]="create.passwordVisible() ? 'text' : 'password'" autocomplete="off" [value]="create.password()" (input)="create.updatePassword($event)" [disabled]="create.busy()">
+            <div class="password-actions">
+              <button class="password-action" type="button" [class.is-active]="create.passwordVisible()" (click)="create.togglePasswordVisibility()" [disabled]="create.busy()" [attr.aria-label]="create.passwordVisible() ? language.t('hidePassword') : language.t('showPassword')" [attr.aria-pressed]="create.passwordVisible()" [title]="create.passwordVisible() ? language.t('hidePassword') : language.t('showPassword')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="2.5"></circle></svg></button>
+              <button class="password-action" type="button" [class.is-copied]="create.passwordCopied()" (click)="create.copyPassword()" [disabled]="create.busy() || !create.password()" [attr.aria-label]="language.t('copyPassword')" [title]="create.passwordCopied() ? language.t('passwordCopied') : language.t('copyPassword')"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="12" rx="1"></rect><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h3"></path></svg></button>
+            </div>
+          </div>
+          <div class="field-note">{{ language.t('passwordHint') }}</div>
+        </div>
+        <div class="form-field expiry-setting"><label for="expiry">{{ language.t('expiry') }}</label><select id="expiry" [value]="create.expiry()" (change)="create.updateExpiry($event)" [disabled]="create.busy()"><option value="1d">{{ language.t('day') }}</option><option value="7d">{{ language.t('week') }}</option><option value="14d">{{ language.t('twoWeeks') }}</option></select></div>
+      </div>
+    </div>
+    @if (create.error().length) { <p class="error" role="alert">{{ create.errorText() }}</p> }
+    <div class="compose-actions"><button class="primary" type="button" (click)="create.create()" [disabled]="create.busy()">{{ create.busy() ? language.t('creating') : language.t('create') }}</button></div>
+  </section>
+}

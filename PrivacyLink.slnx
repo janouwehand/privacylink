@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/PrivacyLink.Api/PrivacyLink.Api.csproj" />
+    <Project Path="src/PrivacyLink.Contracts/PrivacyLink.Contracts.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/PrivacyLink.Api.Tests/PrivacyLink.Api.Tests.csproj" />
+    <Project Path="tests/PrivacyLink.IntegrationTests/PrivacyLink.IntegrationTests.csproj" />
+  </Folder>
+</Solution>

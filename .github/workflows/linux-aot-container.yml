@@ -1,0 +1,67 @@
+name: Linux Native AOT container
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.400
+      - name: Run backend tests
+        run: dotnet test PrivacyLink.slnx --configuration Release
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: src/PrivacyLink.Web/package-lock.json
+      - name: Set up npm
+        run: npm install --global npm@11.16.0
+      - name: Install frontend dependencies
+        working-directory: src/PrivacyLink.Web
+        run: npm ci
+      - name: Run frontend tests
+        working-directory: src/PrivacyLink.Web
+        run: npm test
+
+  linux-aot-container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ASPNETCORE_ENVIRONMENT: Production
+      POSTGRES_PASSWORD: privacylink-ci-temporary-postgres-password
+      PRIVACYLINK_PASSWORD_PEPPER: privacylink-ci-temporary-password-pepper
+      PRIVACYLINK_ALLOWED_HOSTS: localhost;127.0.0.1;privacylinkslim
+      PRIVACYLINK_HTTP_PORT: "18080"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and smoke test Linux AOT image
+        shell: pwsh
+        run: ./scripts/verify-linux-container.ps1
+      - name: Generate temporary production keys for Compose smoke test
+        shell: bash
+        run: |
+          echo "PRIVACYLINK_AUDIT_HASH_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+          echo "PRIVACYLINK_ANALYTICS_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+      - name: Start production Compose stack and wait for API readiness
+        run: docker compose --project-name privacylink-ci up --build --detach --wait --wait-timeout 180
+      - name: Show Compose service state
+        if: always()
+        run: docker compose --project-name privacylink-ci ps
+      - name: Remove production Compose smoke stack
+        if: always()
+        run: docker compose --project-name privacylink-ci down --volumes --remove-orphans --timeout 15

@@ -1,0 +1,75 @@
+services:
+  privacylinkslim:
+    image: "${PRIVACYLINK_IMAGE:-privacylinkslim:local}"
+    pull_policy: "${PRIVACYLINK_PULL_POLICY:-build}"
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: "${ASPNETCORE_ENVIRONMENT:-Production}"
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__PrivacyLink: "Host=postgres;Port=5432;Database=privacylink;Username=privacylink"
+      ConnectionStrings__PrivacyLinkPassword_FILE: /run/secrets/postgres_password
+      Security__PasswordPepper_FILE: /run/secrets/password_pepper
+      Security__AuditHashKey_FILE: /run/secrets/audit_hash_key
+      Security__SecretStore__Provider: Environment
+      Security__RequireHttps: "${PRIVACYLINK_REQUIRE_HTTPS:-false}"
+      Analytics__Key_FILE: /run/secrets/analytics_key
+      Security__TrustedProxies__0: "${PRIVACYLINK_TRUSTED_PROXY_0:-}"
+      Storage__BlobPath: /app/data/blobs
+      AllowedHosts: "${PRIVACYLINK_ALLOWED_HOSTS:?Set PRIVACYLINK_ALLOWED_HOSTS in .env}"
+    ports:
+      - target: 8080
+        published: "${PRIVACYLINK_HTTP_PORT:-8080}"
+        host_ip: "${PRIVACYLINK_BIND_ADDRESS:-127.0.0.1}"
+        protocol: tcp
+    volumes:
+      - privacylink-blobs:/app/data/blobs
+    secrets:
+      - postgres_password
+      - password_pepper
+      - audit_hash_key
+      - analytics_key
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/PrivacyLink.Api", "--healthcheck"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17.11-alpine3.24
+    environment:
+      POSTGRES_DB: privacylink
+      POSTGRES_USER: privacylink
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    volumes:
+      - privacylink-postgres-data:/var/lib/postgresql/data
+    secrets:
+      - postgres_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U privacylink -d privacylink"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  privacylink-postgres-data:
+    name: "${PRIVACYLINK_POSTGRES_VOLUME:-${COMPOSE_PROJECT_NAME}_privacylink-postgres-data}"
+  privacylink-blobs:
+    name: "${PRIVACYLINK_BLOBS_VOLUME:-${COMPOSE_PROJECT_NAME}_privacylink-blobs}"
+
+secrets:
+  postgres_password:
+    environment: POSTGRES_PASSWORD
+  password_pepper:
+    environment: PRIVACYLINK_PASSWORD_PEPPER
+  audit_hash_key:
+    environment: PRIVACYLINK_AUDIT_HASH_KEY
+  analytics_key:
+    environment: PRIVACYLINK_ANALYTICS_KEY
