@@ -6,7 +6,7 @@ import { DailyStatistic, StatisticsApi } from './statistics-api';
 import { StatisticsPage } from './statistics-page';
 
 describe('StatisticsPage', () => {
-  it('shows daily aggregates and the unique IP total in the selected language', async () => {
+  it('shows totals and the unique IP estimate in the selected language', async () => {
     const rows: DailyStatistic[] = [
       { day: '2026-09-30', metric: 'creations', dimension: '', dimensionValue: '', count: 4, bytes: 0 },
       { day: '2026-09-30', metric: 'creation_content_type', dimension: 'content_type', dimensionValue: 'text', count: 3, bytes: 0 },
@@ -27,7 +27,7 @@ describe('StatisticsPage', () => {
     expect(api.getDailyStatistics).toHaveBeenCalledOnce();
     expect(content).toContain('Successful creations');
     expect(content).toContain('Creations by content type');
-    expect(content).toContain('Unique IP addresses');
+    expect(content).toContain('Daily unique IP estimates (summed)');
     expect(content).toContain('2');
     expect(content).toContain('not mean anyone read the message');
     expect(content).toContain('Password-protected files are sent during unlock');
