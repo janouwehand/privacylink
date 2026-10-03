@@ -1,4 +1,4 @@
-name: Linux Native AOT container
+name: PrivacyLink CI
 
 on:
   push:
@@ -13,32 +13,35 @@ permissions:
 
 jobs:
   tests:
+    name: Backend and frontend tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - name: Set up .NET SDK
-        uses: actions/setup-dotnet@v4
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.400
-      - name: Run backend tests
+      - name: Run backend test suite
         run: dotnet test PrivacyLink.slnx --configuration Release
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Install Node.js 24
+        uses: actions/setup-node@v7
         with:
           node-version: 24.18.0
           cache: npm
           cache-dependency-path: src/PrivacyLink.Web/package-lock.json
-      - name: Set up npm
+      - name: Install npm 11.16
         run: npm install --global npm@11.16.0
       - name: Install frontend dependencies
         working-directory: src/PrivacyLink.Web
         run: npm ci
-      - name: Run frontend tests
+      - name: Run frontend test suite
         working-directory: src/PrivacyLink.Web
         run: npm test
 
   linux-aot-container:
+    name: Build and verify production Linux container
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -48,20 +51,21 @@ jobs:
       PRIVACYLINK_ALLOWED_HOSTS: localhost;127.0.0.1;privacylinkslim
       PRIVACYLINK_HTTP_PORT: "18080"
     steps:
-      - uses: actions/checkout@v4
-      - name: Build and smoke test Linux AOT image
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Build image and smoke test its health endpoint
         shell: pwsh
         run: ./scripts/verify-linux-container.ps1
-      - name: Generate temporary production keys for Compose smoke test
+      - name: Generate temporary CI secrets
         shell: bash
         run: |
           echo "PRIVACYLINK_AUDIT_HASH_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
           echo "PRIVACYLINK_ANALYTICS_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
-      - name: Start production Compose stack and wait for API readiness
+      - name: Start production stack and wait for API readiness
         run: docker compose --project-name privacylink-ci up --build --detach --wait --wait-timeout 180
-      - name: Show Compose service state
+      - name: Show service state, including after failures
         if: always()
         run: docker compose --project-name privacylink-ci ps
-      - name: Remove production Compose smoke stack
+      - name: Remove temporary stack and data, including after failures
         if: always()
         run: docker compose --project-name privacylink-ci down --volumes --remove-orphans --timeout 15
