@@ -1,7 +1,7 @@
 # Merge these site blocks into the existing Caddy configuration after checking
 # that the host ports match the environment files on the VPS.
 
-staging.privacylink.nl {
+plstaging.softable.nl {
 	encode zstd gzip
 	reverse_proxy 127.0.0.1:8081
 }
