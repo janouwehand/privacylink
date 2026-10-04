@@ -1,0 +1,162 @@
+name: PrivacyLink deployment
+run-name: Deploy ${{ github.sha }} from ${{ github.ref_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_only:
+        description: Publish the first image only so GHCR package visibility can be configured before deploying
+        required: false
+        default: false
+        type: boolean
+      image_digest:
+        description: Optional existing GHCR digest to redeploy (for rollback); leave empty to build current main
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: privacylink-deployment
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Validate manual deployment options
+        env:
+          PUBLISH_ONLY: ${{ inputs.publish_only }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+        run: |
+          if [[ "$PUBLISH_ONLY" == true && -n "$IMAGE_DIGEST" ]]; then
+            echo 'publish_only cannot be combined with image_digest.' >&2
+            exit 64
+          fi
+      - name: Check out selected main commit
+        uses: actions/checkout@v7
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.400
+      - name: Run backend test suite
+        run: dotnet test PrivacyLink.slnx --configuration Release
+      - name: Install Node.js 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: src/PrivacyLink.Web/package-lock.json
+      - name: Install npm 11.16
+        run: npm install --global npm@11.16.0
+      - name: Install frontend dependencies
+        working-directory: src/PrivacyLink.Web
+        run: npm ci
+      - name: Run frontend test suite
+        working-directory: src/PrivacyLink.Web
+        run: npm test
+
+  publish:
+    name: Build and publish immutable image
+    if: github.ref == 'refs/heads/main' && inputs.image_digest == ''
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.image.outputs.name }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Check out selected main commit
+        uses: actions/checkout@v7
+      - name: Set image name
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish production image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  resolve-image:
+    name: Select image digest
+    if: always() && github.ref == 'refs/heads/main' && needs.validate.result == 'success' && (inputs.image_digest != '' || needs.publish.result == 'success')
+    needs: [validate, publish]
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.resolve.outputs.image }}
+    steps:
+      - name: Validate requested digest for rollback
+        if: inputs.image_digest != ''
+        env:
+          IMAGE_REF: ${{ inputs.image_digest }}
+        run: |
+          if [[ ! "$IMAGE_REF" =~ ^ghcr\.io/janouwehand/privacylink@sha256:[a-f0-9]{64}$ ]]; then
+            echo 'Provide the full GHCR image reference pinned by a SHA-256 digest.' >&2
+            exit 64
+          fi
+          echo "image=$IMAGE_REF" >> "$GITHUB_OUTPUT"
+      - name: Use newly published digest
+        if: inputs.image_digest == ''
+        env:
+          PUBLISHED_IMAGE: ${{ needs.publish.outputs.image }}
+          PUBLISHED_DIGEST: ${{ needs.publish.outputs.digest }}
+        run: echo "image=$PUBLISHED_IMAGE@$PUBLISHED_DIGEST" >> "$GITHUB_OUTPUT"
+
+  deploy-staging:
+    name: Deploy and verify staging
+    if: github.ref == 'refs/heads/main' && inputs.publish_only != true
+    needs: resolve-image
+    runs-on: ubuntu-latest
+    environment: staging
+    timeout-minutes: 20
+    outputs:
+      image: ${{ needs.resolve-image.outputs.image }}
+    steps:
+      - name: Check out deployment scripts
+        uses: actions/checkout@v7
+      - name: Deploy image to staging
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+          IMAGE_REF: ${{ needs.resolve-image.outputs.image }}
+        run: bash ./scripts/deploy-vps.sh staging "$IMAGE_REF"
+      - name: Install Node.js 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.18.0
+      - name: Run create/open protocol smoke checks on staging
+        run: node scripts/verify-prototype.mjs https://staging.privacylink.nl
+      - name: Record the staging-tested image digest
+        env:
+          IMAGE_REF: ${{ needs.resolve-image.outputs.image }}
+        run: printf '%s\n' "$IMAGE_REF" > staging-image.txt
+      - name: Save the staging-tested digest for production promotion
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-image-${{ github.run_id }}
+          path: staging-image.txt
+          if-no-files-found: error
+          retention-days: 30
+

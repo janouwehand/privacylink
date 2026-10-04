@@ -28,6 +28,8 @@ RUN mkdir -p /out/data/blobs
 FROM mcr.microsoft.com/dotnet/runtime-deps:10.0-noble-chiseled AS runtime
 WORKDIR /app
 
+LABEL org.opencontainers.image.source="https://github.com/janouwehand/privacylink"
+
 COPY --from=api-build --chown=1654:1654 /out/ ./
 COPY --from=web-build --chown=1654:1654 /src/dist/privacy-link-web/browser/ ./wwwroot/
 
@@ -35,3 +37,4 @@ ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
 USER 1654
 ENTRYPOINT ["/app/PrivacyLink.Api"]
+
