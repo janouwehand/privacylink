@@ -30,4 +30,3 @@ chmod 600 "$key_file" "$known_hosts_file"
 ssh_options=(-i "$key_file" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o "UserKnownHostsFile=$known_hosts_file")
 remote="$VPS_USER@$VPS_HOST"
 ssh "${ssh_options[@]}" "$remote" "sudo /usr/local/sbin/privacylink-deploy '$environment' '$image'"
-
