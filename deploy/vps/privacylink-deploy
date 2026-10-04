@@ -40,7 +40,8 @@ export PRIVACYLINK_PULL_POLICY='always'
 
 compose=(docker compose --project-name "$project" --env-file "$env_file" --file "$compose_file")
 "${compose[@]}" pull privacylinkslim
-"${compose[@]}" up --no-build --detach --wait --wait-timeout 180
+# Compose does not detect changes to environment-backed secret values, so recreate only the app service.
+"${compose[@]}" up --no-build --detach --wait --wait-timeout 180 --force-recreate privacylinkslim
 
 for attempt in {1..30}; do
   if curl --fail --silent --show-error --max-time 5 -H "Host: $health_host" "$health_url" >/dev/null; then
