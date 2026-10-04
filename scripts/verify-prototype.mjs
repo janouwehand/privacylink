@@ -79,7 +79,7 @@ async function main() {
   const key = await derive(clientKey);
   const ciphertext = new Uint8Array(await webcrypto.subtle.encrypt(
     { name: 'AES-GCM', iv: nonce, additionalData: aad, tagLength: 128 }, key, encoder.encode(secret)));
-  const create = { protocolVersion: 1, expiry: '7d', message: { nonce: b64(nonce), ciphertext: b64(ciphertext) } };
+  const create = { protocolVersion: 1, expiry: '7d', message: { nonce: b64(nonce), ciphertext: b64(ciphertext) }, files: [] };
   assert(canonical(b64(clientKey), 32));
   assert(canonical(create.message.nonce, 12));
   assert(!canonical(`${b64(clientKey)}=`, 32), 'padded client key accepted');
@@ -136,7 +136,7 @@ async function main() {
   await expectRejected('/api/v1/secrets', 'POST', { ...create, protocolVersion: 2 }, 400, 'invalid version');
   await expectRejected('/api/v1/secrets', 'POST', { ...create, message: { ...create.message, nonce: b64(randomBytes(8)) } }, 400, 'invalid nonce');
   await expectRejected('/api/v1/secrets', 'POST', { ...create, extra: true }, 400, 'unknown field');
-  await expectRejected('/api/v1/secrets', 'POST', { ...create, files: [] }, 400, 'unsupported files');
+  await expectRejected('/api/v1/secrets', 'POST', { ...create, files: [{}] }, 400, 'invalid file');
   await expectRejected('/api/v1/secrets', 'POST', { ...create, password: 'unused' }, 400, 'unsupported password');
   const sameOrigin = await request('/api/v1/secrets', 'POST', create, { origin: base.origin });
   expectStatus(sameOrigin, 201, 'same-origin create');
