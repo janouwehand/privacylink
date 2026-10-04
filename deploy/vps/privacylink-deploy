@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+environment="${1:-}"
+image="${2:-}"
+
+case "$environment" in
+  staging)
+    project='privacylink-staging'
+    port='8081'
+    ;;
+  production)
+    project='privacylink-production'
+    port='8080'
+    ;;
+  *) echo 'Environment must be staging or production.' >&2; exit 64 ;;
+esac
+
+if [[ ! "$image" =~ ^ghcr\.io/janouwehand/privacylink@sha256:[a-f0-9]{64}$ ]]; then
+  echo 'Image must be the expected GHCR image pinned by a SHA-256 digest.' >&2
+  exit 64
+fi
+
+compose_dir="/opt/privacylink/$environment"
+compose_file="$compose_dir/compose.yaml"
+env_file="/etc/privacylink/$environment.env"
+health_url="http://127.0.0.1:$port/health/ready"
+
+if [[ ! -r "$compose_file" || ! -r "$env_file" ]]; then
+  echo "Missing Compose file or environment file for $environment." >&2
+  exit 78
+fi
+
+export COMPOSE_PROJECT_NAME="$project"
+export PRIVACYLINK_IMAGE="$image"
+export PRIVACYLINK_PULL_POLICY='always'
+
+compose=(docker compose --project-name "$project" --env-file "$env_file" --file "$compose_file")
+"${compose[@]}" pull privacylinkslim
+"${compose[@]}" up --no-build --detach --wait --wait-timeout 180
+
+for attempt in {1..30}; do
+  if curl --fail --silent --show-error --max-time 5 "$health_url" >/dev/null; then
+    echo "Deployment ready: $environment ($image)"
+    exit 0
+  fi
+  sleep 2
+done
+
+"${compose[@]}" ps >&2
+echo "Deployment did not become ready: $environment" >&2
+exit 1
+

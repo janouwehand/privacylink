@@ -25,7 +25,7 @@ This document describes the current operational baseline for PrivacyLink. Valida
 - At startup, transactional schema migrations run under an advisory lock and are recorded in `schema_migrations`; migrations are idempotent.
 - The PostgreSQL image reads the database password from `POSTGRES_PASSWORD_FILE`; the API builds the Npgsql connection string using the mounted password secret. The Compose secret source `environment` is intended for Docker Compose, not `docker stack deploy`.
 - Cleanup deletes expired blobs before metadata and can be safely repeated. Temporary `.tmp-*` blobs are safely removed at startup.
-- Backups must include both PostgreSQL and `Storage__BlobPath`. Restoring only the database or only the blobs can break references.
+- Production backups must include both the production PostgreSQL database and production `Storage__BlobPath`. Restoring only one can break references. Do not include staging volumes in production backups.
 - After a restore, always run `scripts/reconcile-blobs.ps1`. It is a dry run by default; delete candidates only after separate operational approval.
 
 ## Release gates
@@ -50,13 +50,18 @@ Run the local persistence smoke test with `powershell -File scripts/verify-persi
 ## Remaining blockers
 
 - This repository has no production PostgreSQL/blob environment or production backup/restore exercise with measured RPO/RTO; the local persistence smoke test is not a substitute for one.
+- The VPS still needs its root-owned Compose files, production and staging environment files, restricted deployment command, Caddy routes, and production-only backup destination/schedule configured. See [`deploy/vps/README.md`](../deploy/vps/README.md).
+- GitHub still needs the `staging` and `production` environments, production required reviewer, GHCR package visibility, environment secrets, and a `main` ruleset requiring both CI checks configured.
 - `public/_headers` is a provider profile; the deployment environment must test the final reverse-proxy/CDN configuration.
 - No external load test or disaster-recovery evidence has been produced.
 
 ## CI and release validation
 
 - `scripts/verify-release.ps1` runs restore, backend build and tests, Native AOT publishing, static-hosting validation, frontend tests, and the containerized production build. The script does not deploy anything.
-- `scripts/verify-linux-container.ps1` builds the Dockerfile for `linux-x64`, starts the production image with the in-memory development configuration, and waits for `/health`. The GitHub Actions workflow `.github/workflows/linux-aot-container.yml` runs this artifact check on pushes to `main` and pull requests targeting `main`; it then also starts the production Compose stack with temporary CI credentials and isolated volumes. `docker compose up --wait` waits for PostgreSQL health and API readiness through the built-in `--healthcheck` mode. The workflow removes the temporary containers and volumes afterwards.
+- `scripts/verify-linux-container.ps1` builds the Dockerfile for `linux-x64`, starts the production image with the in-memory development configuration, and waits for `/health`. The GitHub Actions workflow `.github/workflows/linux-aot-container.yml` runs this artifact check on pushes to `main` and pull requests targeting `main`; it then starts a disposable Compose stack with temporary CI credentials and isolated volumes. `docker compose up --wait` waits for PostgreSQL health and API readiness through the built-in health check. The workflow removes its temporary containers and volumes afterwards.
+- `.github/workflows/deploy.yml` is a manual workflow that only proceeds when started from `main`. It reruns backend and frontend tests, publishes one image to GHCR, deploys its digest to staging, runs `scripts/verify-prototype.mjs` there, then waits on the protected `production` environment before deploying the same digest. `scripts/deploy-vps.sh` connects over SSH using environment-scoped secrets; `deploy/vps/privacylink-deploy` performs the fixed host-side Compose update. It does not rebuild images on the VPS.
+- GitHub branch rules must require both `Backend and frontend tests` and `Build and verify production Linux container` before merging to `main`. Workflow files cannot enable this repository setting by themselves.
 - The PostgreSQL/blob smoke test remains a local, temporary check; schedule a periodic restore exercise in the production environment and measure RPO/RTO.
 - `/health` is a liveness probe; `/health/ready` checks dependency readiness. Audit logging is privacy-preserving; monitor status codes, latency, and readiness failures through the host logging/metrics layer, and alert on sustained 5xx responses, 429 spikes, readiness 503 responses, and backup failures.
 - TLS termination must forward the original HTTPS scheme only through explicitly trusted proxy IP addresses. Validate HSTS, `X-Forwarded-*`, host allowlisting, and end-to-end HTTPS in the deployment environment.
+
