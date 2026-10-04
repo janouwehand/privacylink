@@ -9,15 +9,17 @@ case "$environment" in
   staging)
     project='privacylink-staging'
     port='8081'
+    health_host='plstaging.softable.nl'
     ;;
   production)
     project='privacylink-production'
     port='8080'
+    health_host='privacylink.nl'
     ;;
   *) echo 'Environment must be staging or production.' >&2; exit 64 ;;
 esac
 
-if [[ ! "$image" =~ ^ghcr\.io/janouwehand/privacylink@sha256:[a-f0-9]{64}$ ]]; then
+if [[ ! "$image" =~ ^ghcr\\.io/janouwehand/privacylink@sha256:[a-f0-9]{64}$ ]]; then
   echo 'Image must be the expected GHCR image pinned by a SHA-256 digest.' >&2
   exit 64
 fi
@@ -41,7 +43,7 @@ compose=(docker compose --project-name "$project" --env-file "$env_file" --file 
 "${compose[@]}" up --no-build --detach --wait --wait-timeout 180
 
 for attempt in {1..30}; do
-  if curl --fail --silent --show-error --max-time 5 "$health_url" >/dev/null; then
+  if curl --fail --silent --show-error --max-time 5 -H "Host: $health_host" "$health_url" >/dev/null; then
     echo "Deployment ready: $environment ($image)"
     exit 0
   fi
@@ -51,4 +53,3 @@ done
 "${compose[@]}" ps >&2
 echo "Deployment did not become ready: $environment" >&2
 exit 1
-
