@@ -137,7 +137,7 @@ async function main() {
   await expectRejected('/api/v1/secrets', 'POST', { ...create, message: { ...create.message, nonce: b64(randomBytes(8)) } }, 400, 'invalid nonce');
   await expectRejected('/api/v1/secrets', 'POST', { ...create, extra: true }, 400, 'unknown field');
   await expectRejected('/api/v1/secrets', 'POST', { ...create, files: [{}] }, 400, 'invalid file');
-  await expectRejected('/api/v1/secrets', 'POST', { ...create, password: 'unused' }, 400, 'unsupported password');
+  await expectRejected('/api/v1/secrets', 'POST', { ...create, password: '' }, 400, 'invalid password');
   const sameOrigin = await request('/api/v1/secrets', 'POST', create, { origin: base.origin });
   expectStatus(sameOrigin, 201, 'same-origin create');
   await expectRejected('/api/v1/secrets', 'POST', create, 403, 'foreign origin', { origin: 'https://foreign.invalid' });
