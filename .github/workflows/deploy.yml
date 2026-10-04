@@ -103,9 +103,11 @@ jobs:
     needs: [validate, publish]
     runs-on: ubuntu-latest
     outputs:
-      image: ${{ steps.resolve.outputs.image }}
+      image: ${{ steps.rollback.outputs.image || steps.resolve.outputs.image }}
     steps:
       - name: Validate requested digest for rollback
+        id: rollback
+        
         if: inputs.image_digest != ''
         env:
           IMAGE_REF: ${{ inputs.image_digest }}
@@ -116,6 +118,7 @@ jobs:
           fi
           echo "image=$IMAGE_REF" >> "$GITHUB_OUTPUT"
       - name: Use newly published digest
+        id: resolve
         if: inputs.image_digest == ''
         env:
           PUBLISHED_IMAGE: ${{ needs.publish.outputs.image }}
