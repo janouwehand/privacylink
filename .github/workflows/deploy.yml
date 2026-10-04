@@ -147,7 +147,7 @@ jobs:
         with:
           node-version: 24.18.0
       - name: Run create/open protocol smoke checks on staging
-        run: node scripts/verify-prototype.mjs https://staging.privacylink.nl
+        run: node scripts/verify-prototype.mjs https://plstaging.softable.nl
       - name: Record the staging-tested image digest
         env:
           IMAGE_REF: ${{ needs.resolve-image.outputs.image }}
