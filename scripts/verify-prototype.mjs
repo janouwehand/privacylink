@@ -153,7 +153,7 @@ async function main() {
   }, 413, 'oversized decoded message');
   const oversizedRaw = await fetch(new URL('/api/v1/secrets', base), {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: ' '.repeat(384 * 1024 + 1), redirect: 'manual'
+    body: ' '.repeat(36 * 1024 * 1024 + 1), redirect: 'manual'
   });
   headers(oversizedRaw);
   expectStatus({ response: oversizedRaw }, 413, 'oversized raw request');
