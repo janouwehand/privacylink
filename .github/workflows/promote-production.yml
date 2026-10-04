@@ -1,0 +1,100 @@
+name: PrivacyLink production promotion
+run-name: Promote staging run ${{ inputs.staging_run_id }} to production
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_run_id:
+        description: Run ID of a successful PrivacyLink deployment that passed the staging smoke check
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: privacylink-production
+  cancel-in-progress: false
+
+jobs:
+  validate-staging:
+    name: Verify staging release
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run_id: ${{ steps.verify.outputs.run_id }}
+    steps:
+      - name: Validate successful staging run
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          STAGING_RUN_ID: ${{ inputs.staging_run_id }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$STAGING_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo 'staging_run_id must be a numeric GitHub Actions run ID.' >&2
+            exit 64
+          fi
+
+          api="https://api.github.com/repos/$REPOSITORY/actions/runs/$STAGING_RUN_ID"
+          run_json="$(curl --fail --silent --show-error -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' "$api")"
+          jq -e '
+            .event == "workflow_dispatch" and
+            .head_branch == "main" and
+            .status == "completed" and
+            .conclusion == "success" and
+            (.path | endswith("/.github/workflows/deploy.yml") or . == ".github/workflows/deploy.yml")
+          ' <<<"$run_json" >/dev/null || {
+            echo 'The selected run is not a successful manual deployment from main.' >&2
+            exit 1
+          }
+
+          jobs_json="$(curl --fail --silent --show-error -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' "$api/jobs?per_page=100")"
+          jq -e '[.jobs[] | select(.name == "Deploy and verify staging" and .conclusion == "success")] | length == 1' <<<"$jobs_json" >/dev/null || {
+            echo 'The selected run did not successfully complete the staging deploy and smoke check.' >&2
+            exit 1
+          }
+
+          echo "run_id=$STAGING_RUN_ID" >> "$GITHUB_OUTPUT"
+
+  deploy-production:
+    name: Deploy verified image to production
+    needs: validate-staging
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - name: Check out deployment scripts from main
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Download digest recorded by the staging run
+        uses: actions/download-artifact@v4
+        with:
+          name: staging-image-${{ needs.validate-staging.outputs.run_id }}
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.validate-staging.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: release
+      - name: Validate immutable image reference
+        id: image
+        run: |
+          set -euo pipefail
+          image_ref="$(tr -d '\r\n' < release/staging-image.txt)"
+          if [[ ! "$image_ref" =~ ^ghcr\.io/janouwehand/privacylink@sha256:[a-f0-9]{64}$ ]]; then
+            echo 'The staging artifact does not contain a valid pinned GHCR image digest.' >&2
+            exit 64
+          fi
+          echo "image_ref=$image_ref" >> "$GITHUB_OUTPUT"
+      - name: Deploy the staging-tested digest to production
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+          IMAGE_REF: ${{ steps.image.outputs.image_ref }}
+        run: bash ./scripts/deploy-vps.sh production "$IMAGE_REF"
+

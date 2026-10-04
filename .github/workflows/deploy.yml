@@ -129,6 +129,8 @@ jobs:
     runs-on: ubuntu-latest
     environment: staging
     timeout-minutes: 20
+    outputs:
+      image: ${{ needs.resolve-image.outputs.image }}
     steps:
       - name: Check out deployment scripts
         uses: actions/checkout@v7
@@ -146,29 +148,15 @@ jobs:
           node-version: 24.18.0
       - name: Run create/open protocol smoke checks on staging
         run: node scripts/verify-prototype.mjs https://staging.privacylink.nl
-
-  deploy-production:
-    name: Deploy production
-    if: github.ref == 'refs/heads/main' && inputs.publish_only != true
-    needs: [resolve-image, deploy-staging]
-    runs-on: ubuntu-latest
-    environment: production
-    timeout-minutes: 20
-    steps:
-      - name: Check out deployment scripts
-        uses: actions/checkout@v7
-      - name: Deploy the staging-tested image to production
+      - name: Record the staging-tested image digest
         env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
-          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
           IMAGE_REF: ${{ needs.resolve-image.outputs.image }}
-        run: bash ./scripts/deploy-vps.sh production "$IMAGE_REF"
-      - name: Install Node.js 24
-        uses: actions/setup-node@v7
+        run: printf '%s\n' "$IMAGE_REF" > staging-image.txt
+      - name: Save the staging-tested digest for production promotion
+        uses: actions/upload-artifact@v4
         with:
-          node-version: 24.18.0
-      - name: Check production readiness
-        run: node scripts/check-readiness.mjs https://privacylink.nl
+          name: staging-image-${{ github.run_id }}
+          path: staging-image.txt
+          if-no-files-found: error
+          retention-days: 30
 

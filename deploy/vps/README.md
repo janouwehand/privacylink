@@ -43,12 +43,12 @@ The DNS A and AAAA records for `staging.privacylink.nl` are already configured. 
 
 In repository settings:
 
-1. Add a `staging` environment and a `production` environment, both restricted to the `main` branch. Add a required reviewer to `production`.
+1. Add `staging` and `production` environments, both restricted to the `main` branch. A production required reviewer is an additional safeguard when the repository plan supports it. Production promotion is always a separate, manually started workflow after staging succeeds.
 2. In each environment, add `VPS_HOST`, `VPS_USER`, `VPS_SSH_PRIVATE_KEY`, and `VPS_SSH_KNOWN_HOSTS`. Verify the host key fingerprint independently before storing it. Keep deployment secrets out of repository-level secrets.
 3. Run `PrivacyLink deployment` once with `publish_only=true` to create the GHCR package without attempting a deployment. Then set `ghcr.io/janouwehand/privacylink` to public so the VPS can pull by digest without registry credentials. This makes the container image publicly downloadable; GitHub does not let you change a public package back to private. The source repository is currently private, so make this visibility decision deliberately.
 4. Add a ruleset for `main` that requires pull requests and both successful status checks: `Backend and frontend tests` and `Build and verify production Linux container`.
 
-The `PrivacyLink deployment` workflow is started manually from `main`. Normally it reruns backend and frontend tests, builds and publishes one Linux image, deploys its digest to staging, runs the protocol smoke check there, then waits for production environment approval before deploying the same digest to production. Its optional `image_digest` input redeploys an existing digest through staging and production approval for rollback. Set `publish_only=true` only for the one-time package setup described above.
+The `PrivacyLink deployment` workflow is started manually from `main`. It reruns backend and frontend tests, publishes one image, deploys its digest to staging, and runs the protocol smoke check. On success, it stores the tested digest as a run artifact for 30 days. To promote, start `PrivacyLink production promotion` manually from `main` and provide the successful staging workflow's run ID. The promotion workflow verifies that the run came from this deployment workflow on `main`, that its staging job succeeded, then deploys the exact tested digest. Its manual start is the human production gate. The optional `image_digest` input on `PrivacyLink deployment` redeploys an existing digest to staging for verification; use its new successful run ID to promote that rollback digest. Set `publish_only=true` only for the one-time package setup described above.
 
 ## 5. Production data backups
 
