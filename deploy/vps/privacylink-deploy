@@ -45,6 +45,7 @@ compose=(docker compose --project-name "$project" --env-file "$env_file" --file 
 
 for attempt in {1..30}; do
   if curl --fail --silent --show-error --max-time 5 -H "Host: $health_host" "$health_url" >/dev/null; then
+    docker image prune --all --force --filter 'label=org.opencontainers.image.source=https://github.com/janouwehand/privacylink'
     echo "Deployment ready: $environment ($image)"
     exit 0
   fi

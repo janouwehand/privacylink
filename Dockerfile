@@ -1,11 +1,14 @@
 FROM node:24.18-bookworm AS web-build
 WORKDIR /src
 
+ARG APP_VERSION=dev
+
 COPY src/PrivacyLink.Web/package.json src/PrivacyLink.Web/package-lock.json ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
 
 COPY src/PrivacyLink.Web/ ./
-RUN npm run build -- --configuration production
+RUN APP_VERSION="$APP_VERSION" node -e "require('node:fs').writeFileSync('src/app/app-version.ts', 'export const APP_VERSION = ' + JSON.stringify(process.env.APP_VERSION) + ';\\n')" \
+    && npm run build -- --configuration production
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0-aot AS api-build
 WORKDIR /src
@@ -28,7 +31,9 @@ RUN mkdir -p /out/data/blobs
 FROM mcr.microsoft.com/dotnet/runtime-deps:10.0-noble-chiseled AS runtime
 WORKDIR /app
 
-LABEL org.opencontainers.image.source="https://github.com/janouwehand/privacylink"
+ARG APP_VERSION=dev
+LABEL org.opencontainers.image.source="https://github.com/janouwehand/privacylink" \
+      org.opencontainers.image.version="$APP_VERSION"
 
 COPY --from=api-build --chown=1654:1654 /out/ ./
 COPY --from=web-build --chown=1654:1654 /src/dist/privacy-link-web/browser/ ./wwwroot/

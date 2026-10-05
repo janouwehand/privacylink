@@ -74,6 +74,9 @@ jobs:
       - name: Set image name
         id: image
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - name: Set application version
+        id: version
+        run: echo "value=v${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Log in to GitHub Container Registry
@@ -89,7 +92,11 @@ jobs:
           context: .
           push: true
           platforms: linux/amd64
-          tags: ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+          tags: |
+            ${{ steps.image.outputs.name }}:${{ steps.version.outputs.value }}
+            ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+          build-args: |
+            APP_VERSION=${{ steps.version.outputs.value }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -103,7 +110,7 @@ jobs:
     steps:
       - name: Validate requested digest for rollback
         id: rollback
-        
+
         if: inputs.image_digest != ''
         env:
           IMAGE_REF: ${{ inputs.image_digest }}
@@ -185,3 +192,18 @@ jobs:
           VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
           IMAGE_REF: ${{ needs.deploy-staging.outputs.image }}
         run: bash ./scripts/deploy-vps.sh production "$IMAGE_REF"
+
+  cleanup-ghcr:
+    name: Retain recent GHCR images
+    if: github.ref == 'refs/heads/main' && inputs.publish_only != true && inputs.image_digest == ''
+    needs: deploy-production
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - name: Delete older package versions, keeping the latest 20
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: privacylink
+          package-type: container
+          min-versions-to-keep: 20
