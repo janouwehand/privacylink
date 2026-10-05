@@ -14,6 +14,12 @@ Messages are encrypted in the browser using AES-256-GCM and an HKDF-derived key.
 
 PostgreSQL and Docker are not required for the temporary development setup. The persistent setup uses PostgreSQL and a durable blob root; transactional startup migrations record applied changes in `schema_migrations`. See the [production runbook](docs/runbook.md) for secret management, health probes, backups, and release gates.
 
+## Text file line endings
+
+Use LF line endings for every text file in this repository. The root `.editorconfig` and the web app's nested `.editorconfig` tell compatible editors to write LF; `.gitattributes` (`* text=auto eol=lf`) makes Git store and check out text files as LF, including on Windows when global `core.autocrlf` is enabled. Do not add per-file CRLF overrides.
+
+Check a changed tracked file with `git ls-files --eol -- <path>`; expect `i/lf` and `w/lf` (with the repository text attribute applied). If it reports `w/mixed` or `w/crlf`, convert the whole file to LF in an EditorConfig-aware editor before committing. Recheck after saving. Git normalizes text files when they are added, but the working file should also remain LF to avoid mixed-line-ending diffs.
+
 Example environment variable configuration for a persistent production deployment (replace every placeholder with a real value):
 
 ```powershell
@@ -116,4 +122,3 @@ Copyright © 2026 Softable. All rights reserved. This source code is public for 
 Message and file contents are encrypted in the browser; the API receives ciphertext, not plaintext. With password protection enabled, the browser computes an HMAC-SHA-256 token using the entered password as the HMAC key and the client key as the message. At creation and unlock, it sends this derived token to the API, not the entered password or client key. During creation, the API combines the token with its server-side pepper and uses Argon2id to derive a key that wraps the already client-encrypted content in an additional AES-256-GCM envelope. For password-protected content, the API persists the salt, outer nonces, and enveloped ciphertext; it does not persist the entered password, HMAC token, or derived key. At unlock, the API uses the token to open that outer envelope and returns the still client-encrypted content; the browser then decrypts it with the client key from the link fragment.
 
 Separately, sender history stores the entered password, full share link (including its client key), and revoke token in this browser's `localStorage`. Expired history entries are removed by browser-history cleanup when the app runs; anyone with access to this browser profile can access entries that remain stored there. A compromised frontend could still serve malicious JavaScript, and the prototype does not protect against a compromised device.
-

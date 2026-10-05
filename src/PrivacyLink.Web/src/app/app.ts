@@ -5,6 +5,7 @@ import { CreateState } from './create/create-state';
 import { HistoryState } from './history/history-state';
 import { LanguageState } from './language-state';
 import { PasswordGenerator } from './password-generator/password-generator';
+import { APP_VERSION } from './app-version';
 
 @Component({
   selector: 'app-root',
@@ -12,6 +13,7 @@ import { PasswordGenerator } from './password-generator/password-generator';
   templateUrl: './app.html'
 })
 export class App implements AfterViewInit {
+  protected readonly appVersion = APP_VERSION;
   protected readonly app = inject(AppState);
   protected readonly create = inject(CreateState);
   protected readonly history = inject(HistoryState);
