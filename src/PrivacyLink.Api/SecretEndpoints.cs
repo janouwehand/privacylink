@@ -7,7 +7,7 @@ namespace PrivacyLink.Api;
 internal static class SecretEndpoints
 {
     private static readonly HashSet<string> Expiries = ["1d", "7d", "14d"];
-    private static readonly string[] DefaultExtensions = [".pdf", ".txt", ".md", ".rtf", ".csv", ".tsv", ".json", ".xml", ".yaml", ".yml", ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff"];
+    private static readonly string[] DefaultExtensions = [".pdf", ".txt", ".md", ".rtf", ".csv", ".tsv", ".json", ".xml", ".yaml", ".yml", ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".7z", ".zip", ".rar", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".zst", ".cer", ".crt", ".der", ".pem", ".p7b", ".p7c", ".p12", ".pfx", ".key"];
 
     public static IResult Capabilities(IConfiguration configuration)
     {
