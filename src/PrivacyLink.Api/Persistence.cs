@@ -126,7 +126,7 @@ internal interface ISecretRepository
 {
     Task CheckHealthAsync(CancellationToken cancellationToken = default);
     Task<bool> InitializeAsync(CancellationToken cancellationToken = default);
-    Task<StoredSecret?> CreateAsync(StoredSecret secret, IReadOnlyList<StatisticsEvent>? statistics = null, CancellationToken cancellationToken = default);
+    Task<StoredSecret?> CreateAsync(StoredSecret secret, CancellationToken cancellationToken = default);
     Task<StoredSecret?> GetAsync(string id, DateTimeOffset now, CancellationToken cancellationToken = default);
     Task<StoredSecret?> GetForRevocationAsync(string id, string revokeTokenHash, CancellationToken cancellationToken = default);
     Task<UnlockAttemptAdmission> ReserveUnlockAttemptAsync(string id, DateTimeOffset now, int maxAttempts, TimeSpan window, TimeSpan cooldown, CancellationToken cancellationToken = default);
@@ -160,7 +160,7 @@ internal sealed class InMemorySecretRepository : ISecretRepository
         return Task.CompletedTask;
     }
 
-    public Task<StoredSecret?> CreateAsync(StoredSecret secret, IReadOnlyList<StatisticsEvent>? statistics = null, CancellationToken cancellationToken = default)
+    public Task<StoredSecret?> CreateAsync(StoredSecret secret, CancellationToken cancellationToken = default)
     {
         lock (_gate)
         {
@@ -313,6 +313,10 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
                     visitor_hmac bytea NOT NULL,
                     PRIMARY KEY (day, visitor_hmac)
                 );
+                """,
+            [6] = """
+                DROP TABLE IF EXISTS stats_visitors_daily;
+                DROP TABLE IF EXISTS stats_daily;
                 """
         };
         foreach (var (version, sql) in migrations.OrderBy(pair => pair.Key))
@@ -328,7 +332,7 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
         return true;
     }
 
-    public async Task<StoredSecret?> CreateAsync(StoredSecret secret, IReadOnlyList<StatisticsEvent>? statistics = null, CancellationToken cancellationToken = default)
+    public async Task<StoredSecret?> CreateAsync(StoredSecret secret, CancellationToken cancellationToken = default)
     {
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
@@ -347,13 +351,6 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
             return null;
         }
 
-        if (statistics is { Count: > 0 })
-        {
-            var statisticsDay = statistics[0].Day ?? DateOnly.FromDateTime(DateTime.UtcNow);
-            if (!await StatisticsRecorder.AcquireDayWriteLockAsync(connection, transaction, statisticsDay, cancellationToken))
-                throw new StatisticsDayFinalizedException();
-        }
-
         await using var command = new NpgsqlCommand("INSERT INTO secrets (id, expires_at, protocol_version, nonce, blob_id, password_salt, message_outer_nonce, ciphertext_size, files_json, revoke_token_hash) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT DO NOTHING", connection, transaction);
         command.Parameters.AddWithValue(secret.Id);
         command.Parameters.AddWithValue(secret.ExpiresAt.UtcDateTime);
@@ -366,8 +363,6 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
         command.Parameters.AddWithValue(System.Text.Json.JsonSerializer.Serialize(secret.Files, PrivacyLinkJsonContext.Default.IReadOnlyListStoredFile));
         command.Parameters.AddWithValue((object?)secret.RevokeTokenHash ?? DBNull.Value);
         var created = await command.ExecuteNonQueryAsync(cancellationToken) == 1;
-        if (created && statistics is not null)
-            await StatisticsRecorder.RecordBatchAsync(connection, transaction, statistics, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return created ? secret : null;
     }

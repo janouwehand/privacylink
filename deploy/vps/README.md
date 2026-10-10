@@ -1,6 +1,6 @@
 # Contabo VPS setup
 
-This setup guide prepares the existing Contabo Softable VPS for the manual GitHub Actions deployment. Staging and production use separate Compose projects, environment files, databases, and blob volumes. Caddy remains installed and managed on the VPS.
+This setup guide prepares the existing Contabo Softable VPS for the manual GitHub Actions deployments. Staging, feature, and production use separate Compose projects, environment files, databases, and blob volumes. Caddy remains installed and managed on the VPS.
 
 ## 1. Prepare the host
 
@@ -9,47 +9,48 @@ Use a dedicated SSH deployment account. Install Docker Engine with the Compose p
 Create root-owned directories and install the versioned Compose file and deploy command as root:
 
 ```sh
-sudo install -d -o root -g root -m 0755 /opt/privacylink/staging /opt/privacylink/production
+sudo install -d -o root -g root -m 0755 /opt/privacylink/staging /opt/privacylink/feature /opt/privacylink/production
 sudo install -d -o root -g root -m 0755 /etc/privacylink
 sudo install -o root -g root -m 0644 compose.yaml /opt/privacylink/staging/compose.yaml
+sudo install -o root -g root -m 0644 compose.yaml /opt/privacylink/feature/compose.yaml
 sudo install -o root -g root -m 0644 compose.yaml /opt/privacylink/production/compose.yaml
 sudo install -o root -g root -m 0750 deploy/vps/privacylink-deploy /usr/local/sbin/privacylink-deploy
 ```
 
-The deployment account needs read access to the Compose files and access to `sudo` for only `/usr/local/sbin/privacylink-deploy`. Do not let it edit the root-owned Compose files or join the Docker group. The deployment script accepts only `staging` or `production` and a digest for `ghcr.io/janouwehand/privacylink`.
+The deployment account needs read access to the Compose files and access to `sudo` for only `/usr/local/sbin/privacylink-deploy`. Do not let it edit the root-owned Compose files or join the Docker group. The deployment script accepts `staging` and `production` digests for `ghcr.io/janouwehand/privacylink`, or a `feature` digest for `ghcr.io/janouwehand/privacylink-feature`.
 
-Whenever `compose.yaml` or the server deploy command changes, install the reviewed version on the VPS before deploying an image that relies on it. The server deploy command removes unused PrivacyLink images after a healthy deployment. Docker keeps any PrivacyLink image still used by either the staging or production containers.
+Whenever `compose.yaml` or the server deploy command changes, install the reviewed version on the VPS before deploying an image that relies on it. The server deploy command removes unused PrivacyLink images after a healthy deployment. Docker keeps any PrivacyLink image still used by staging, feature, or production containers.
 
 ## 2. Create environment files
 
-Create `/etc/privacylink/staging.env` and `/etc/privacylink/production.env` as root-owned files with mode `0600`. Each file must define:
+Create `/etc/privacylink/staging.env`, `/etc/privacylink/feature.env`, and `/etc/privacylink/production.env` as root-owned files with mode `0600`. Each file must define:
 
-- Independent values for `POSTGRES_PASSWORD`, `PRIVACYLINK_PASSWORD_PEPPER`, `PRIVACYLINK_AUDIT_HASH_KEY`, and `PRIVACYLINK_ANALYTICS_KEY`. Generate unique values per environment. The audit and analytics values must each be Base64-encoded random values of at least 32 bytes.
+- Independent values for `POSTGRES_PASSWORD`, `PRIVACYLINK_PASSWORD_PEPPER`, and `PRIVACYLINK_AUDIT_HASH_KEY`. Generate unique values per environment. The audit hash key must be a Base64-encoded random value of at least 32 bytes.
 - `ASPNETCORE_ENVIRONMENT=Production`.
-- `PRIVACYLINK_ALLOWED_HOSTS=plstaging.softable.nl` for staging and `PRIVACYLINK_ALLOWED_HOSTS=privacylink.nl` for production.
+- `PRIVACYLINK_ALLOWED_HOSTS=plstaging.softable.nl` for staging, `PRIVACYLINK_ALLOWED_HOSTS=feature.privacylink.nl` for feature, and `PRIVACYLINK_ALLOWED_HOSTS=privacylink.nl` for production.
 - `PRIVACYLINK_REQUIRE_HTTPS=false`, because Caddy terminates HTTPS and forwards to the loopback-only HTTP port.
-- `PRIVACYLINK_BIND_ADDRESS=127.0.0.1` and a distinct `PRIVACYLINK_HTTP_PORT`: `8081` for staging and `8080` for production.
+- `PRIVACYLINK_BIND_ADDRESS=127.0.0.1` and a distinct `PRIVACYLINK_HTTP_PORT`: `8081` for staging, `8082` for feature, and `8080` for production.
 - `PRIVACYLINK_TRUSTED_PROXY_0` set to the exact proxy address the API container sees. Determine this for each Compose network on the VPS; do not guess or trust a whole subnet.
 
-Use separate project names `privacylink-staging` and `privacylink-production`. The deploy command supplies the project name and image digest when running Compose. Never copy production environment values into staging.
+Use separate project names `privacylink-staging`, `privacylink-feature`, and `privacylink-production`. The deploy command supplies the project name and image digest when running Compose. Never copy production or staging environment values into feature.
 
 ## 3. Configure Caddy
 
-Review `deploy/Caddyfile` and merge its site blocks into the existing Caddy configuration. Verify the loopback ports match each environment file. Validate and reload the existing Caddy service using the VPS's service manager. Caddy should serve staging and `privacylink.nl`, and permanently redirect `privacylink.eu` to the matching path on `privacylink.nl`.
+Review `deploy/Caddyfile` and merge its site blocks into the existing Caddy configuration. Verify the loopback ports match each environment file. Validate and reload the existing Caddy service using the VPS's service manager. Caddy should serve staging, feature, and `privacylink.nl`, and permanently redirect `privacylink.eu` to the matching path on `privacylink.nl`.
 
-The DNS A and AAAA records for `plstaging.softable.nl` are already configured. Confirm production records for `privacylink.nl` and `privacylink.eu` point to this VPS before enabling those Caddy sites.
+The DNS A and AAAA records for `plstaging.softable.nl` and `feature.privacylink.nl` point to this VPS. Confirm production records for `privacylink.nl` and `privacylink.eu` point to this VPS before enabling those Caddy sites.
 
 ## 4. Configure GitHub
 
 In repository settings:
 
-1. Add `staging` and `production` environments, both restricted to the `main` branch. A production required reviewer is an additional safeguard when the repository plan supports it. Production promotion is always a separate, manually started workflow after staging succeeds.
-2. In each environment, add `VPS_HOST`, `VPS_USER`, `VPS_SSH_PRIVATE_KEY`, and `VPS_SSH_KNOWN_HOSTS`. Verify the host key fingerprint independently before storing it. Keep deployment secrets out of repository-level secrets.
-3. Run `PrivacyLink deployment` once with `publish_only=true` to create the GHCR package without attempting a deployment. Then set `ghcr.io/janouwehand/privacylink` to public so the VPS can pull by digest without registry credentials. This makes the container image publicly downloadable; GitHub does not let you change a public package back to private. The source repository is public; make the package-visibility decision deliberately.
+1. Add `staging`, `feature`, and `production` environments, each restricted to the `main` branch. A production required reviewer is an additional safeguard when the repository plan supports it. Production promotion remains in the existing deployment workflow after staging succeeds.
+2. Add independent `VPS_HOST`, `VPS_USER`, `VPS_SSH_PRIVATE_KEY`, and `VPS_SSH_KNOWN_HOSTS` secrets to each environment. Verify the host key fingerprint independently before storing it. Keep deployment secrets out of repository-level secrets.
+3. Run `PrivacyLink deployment` once with `publish_only=true` to create the main GHCR package without attempting a deployment. Set `ghcr.io/janouwehand/privacylink` to public. Start `PrivacyLink feature deployment` from `main` with the feature branch and `publish_only=true` to create `ghcr.io/janouwehand/privacylink-feature` without deploying it, then set that package to public. The VPS pulls both packages by digest without registry credentials. Public packages are publicly downloadable and cannot be made private again; make that visibility decision deliberately.
 4. Add a ruleset for `main` that requires pull requests and both successful status checks: `Backend and frontend tests` and `Build and verify production Linux container`.
 
-The `PrivacyLink deployment` workflow is started manually from `main`. It reruns backend and frontend tests, publishes one image tagged with the Actions run number and attempt (`v<run_number>.<run_attempt>`, for example `v12.1`, `v12.2`, then `v13.1`) and the source commit, then deploys by immutable digest. This gives each build attempt its own increasing version, including workflow reruns. The same version is built into the website footer and the OCI image metadata. After a successful deployment of a newly built image, GHCR cleanup retains the newest 20 package versions, and the server deploy command removes unused PrivacyLink images while preserving images still used by staging or production containers. GHCR cleanup is skipped when `image_digest` is supplied for a rollback, so the selected rollback package is not deleted by that run. Keep 20 versions if you want a practical rollback window. On success, the workflow stores the tested digest as a run artifact for 30 days. The optional `image_digest` input redeploys an existing digest to staging for verification; that rollback continues to display the version built into that image. Set `publish_only=true` only for the one-time package setup described above.
+The `PrivacyLink deployment` workflow is started manually from `main` and keeps the existing main → staging → approved production promotion. The separate `PrivacyLink feature deployment` workflow is also started from `main`; enter a feature branch name, and it builds that branch before deploying only to `feature.privacylink.nl`. It uses a separate GHCR package and the `feature` environment secrets, database, and blob volume. It never deploys feature code to shared staging or production. Both workflows deploy immutable digests and retain their newest 20 package versions after successful deployment. The server deploy command removes unused images while preserving images used by any of the three installations.
 
 ## 5. Production data backups
 
-Back up production PostgreSQL and the production blob volume together. Exclude both staging volumes from production backup and restore jobs. Store backups outside the live VPS storage and verify a paired database/blob restore before relying on the service. Configure the backup destination, encryption, schedule, and retention before enabling automated backups; those operational choices are intentionally not guessed here.
+Back up production PostgreSQL and the production blob volume together. Exclude staging and feature volumes from production backup and restore jobs. Store backups outside the live VPS storage and verify a paired database/blob restore before relying on the service. Configure the backup destination, encryption, schedule, and retention before enabling automated backups; those operational choices are intentionally not guessed here.

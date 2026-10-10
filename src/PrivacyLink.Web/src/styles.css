@@ -181,16 +181,6 @@ h2 { font-size: 18px; margin: 0 0 26px; }
 .security-engineering-section li + li { margin-top: 6px; }
 .security-disclaimer { margin-top: 28px; padding: 16px 18px; border: 1px solid #d9d2b5; background: #fbf8ec; color: #625a3d; font-size: 13px; line-height: 1.6; }
 .security-back-action { display: inline-flex; align-items: center; margin-top: 24px; text-decoration: none; }
-.statistics-content { width: 100%; }
-.statistics-state { margin: 24px 0; padding: 20px; border: 1px dashed #aaa; color: #555; text-align: center; }
-.statistics-table-wrap { width: 100%; overflow-x: auto; border: 1px solid #ddd; }
-.statistics-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.statistics-table th { padding: 11px 12px; background: #f5f5f2; color: #444; font-size: 12px; text-align: left; }
-.statistics-table td, .statistics-table tbody th { padding: 10px 12px; border-top: 1px solid #e5e5e5; text-align: left; }
-.statistics-table td:not(:first-child), .statistics-table thead th:not(:first-child) { width: 18%; text-align: right; white-space: nowrap; }
-.statistics-table tbody th { font-weight: 600; }
-.statistics-dimension { display: block; margin-top: 3px; color: #666; font-size: 12px; font-weight: 400; }
-.statistics-note { margin: 22px 0; color: #666; font-size: 12px; line-height: 1.5; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
 .dialog-actions .primary, .dialog-actions .secondary { min-height: 42px; }
 .text-button { display: block; margin: 25px 0; background: none; border: 0; color: #111; text-decoration: underline; font: inherit; font-weight: 700; cursor: pointer; }

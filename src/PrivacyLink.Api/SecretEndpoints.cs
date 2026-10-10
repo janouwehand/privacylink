@@ -16,7 +16,7 @@ internal static class SecretEndpoints
         return Results.Json(new FileUploadPolicyResponse(maxFiles, maxFileBytes, AllowedExtensions(configuration).OrderBy(extension => extension, StringComparer.Ordinal).ToArray()), PrivacyLinkJsonContext.Default.FileUploadPolicyResponse);
     }
 
-    public static async Task<IResult> Create(HttpRequest request, ISecretRepository repository, IBlobStorage blobs, PasswordEnvelopeService envelopes, TimeProvider clock, IConfiguration configuration, StatisticsRecorder statistics)
+    public static async Task<IResult> Create(HttpRequest request, ISecretRepository repository, IBlobStorage blobs, PasswordEnvelopeService envelopes, TimeProvider clock, IConfiguration configuration)
     {
         var cancellationToken = request.HttpContext.RequestAborted;
         var maxMessage = Limit(configuration, "Limits:MaxMessagePlaintextBytes", 80000);
@@ -120,20 +120,9 @@ internal static class SecretEndpoints
             }
             var secret = new StoredSecret(secretId, clock.GetUtcNow().Add(ParseLifetime(expiry.GetString()!)), message?.Nonce, messageBlobId, (message?.Ciphertext.LongLength ?? 0) + storedFiles.Sum(f => f.Size + 16), storedFiles, passwordSession is null ? null : Encode(passwordSession.Salt), messageOuterNonce, revokeTokenHash);
             cancellationToken.ThrowIfCancellationRequested();
-            var contentType = message is not null && storedFiles.Count > 0 ? "both" : message is not null ? "text" : "files";
-            var visitorEvent = statistics.Event(request.HttpContext, "creations");
-            var creationStats = new[]
-            {
-                visitorEvent,
-                visitorEvent with { Metric = "creation_content_type", Dimension = "content_type", Value = contentType },
-                visitorEvent with { Metric = "creation_password_protected", Dimension = "password_protected", Value = secret.PasswordProtected ? "true" : "false" },
-                visitorEvent with { Metric = "creation_expiry", Dimension = "expiry", Value = expiry.GetString()! },
-                visitorEvent with { Metric = "files", Count = storedFiles.Count, Bytes = storedFiles.Sum(file => file.Size) }
-            };
-            if (await repository.CreateAsync(secret, creationStats) is null)
+            if (await repository.CreateAsync(secret) is null)
             {
                 foreach (var blobId in blobIds) await blobs.DeleteAsync(secret.Id, blobId);
-                request.HttpContext.Items["PrivacyLink.StatisticsErrorCategory"] = "capacity";
                 return Error(429, "rate_limited");
             }
             return Results.Json(new CreateSecretResponse(secret.Id, secret.ExpiresAt, secret.PasswordProtected, revokeToken), PrivacyLinkJsonContext.Default.CreateSecretResponse, statusCode: 201);
@@ -144,13 +133,6 @@ internal static class SecretEndpoints
         catch (PasswordEnvelopeCapacityException)
         {
             if (cancellationToken.IsCancellationRequested) return Results.Empty;
-            return Error(503, "temporarily_unavailable");
-        }
-        catch (StatisticsDayFinalizedException)
-        {
-            if (secretId is not null) foreach (var blobId in blobIds) { try { await blobs.DeleteAsync(secretId, blobId); } catch { } }
-            if (cancellationToken.IsCancellationRequested) return Results.Empty;
-            request.HttpContext.Response.Headers.RetryAfter = "2";
             return Error(503, "temporarily_unavailable");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -203,7 +185,7 @@ internal static class SecretEndpoints
         catch (JsonException) { return Error(400, "invalid_request"); }
     }
 
-    public static async Task<IResult> Open(string id, HttpRequest request, ISecretRepository repository, IBlobStorage blobs, TimeProvider clock, StatisticsRecorder statistics)
+    public static async Task<IResult> Open(string id, HttpRequest request, ISecretRepository repository, IBlobStorage blobs, TimeProvider clock)
     {
         if (request.ContentLength is > 0 || request.Headers.ContainsKey("Transfer-Encoding")) return Error(400, "invalid_request");
         if (!ValidId(id) || await repository.GetAsync(id, clock.GetUtcNow()) is not { } secret) return Error(404, "not_found");
@@ -212,13 +194,12 @@ internal static class SecretEndpoints
         {
             MessageCiphertext? message = null;
             if (secret.MessageBlobId is not null && secret.MessageNonce is not null) message = new MessageCiphertext(secret.MessageNonce, Encode(await blobs.ReadAsync(secret.Id, secret.MessageBlobId)));
-            await statistics.RecordAsync(statistics.Event(request.HttpContext, "secret_open"), request.HttpContext.RequestAborted);
             return Results.Json(new OpenSecretResponse(1, message, []), PrivacyLinkJsonContext.Default.OpenSecretResponse);
         }
         catch (FileNotFoundException) { return Error(404, "not_found"); }
     }
 
-    public static async Task<IResult> Unlock(string id, HttpRequest request, ISecretRepository repository, IBlobStorage blobs, PasswordEnvelopeService envelopes, TimeProvider clock, IConfiguration configuration, StatisticsRecorder statistics)
+    public static async Task<IResult> Unlock(string id, HttpRequest request, ISecretRepository repository, IBlobStorage blobs, PasswordEnvelopeService envelopes, TimeProvider clock, IConfiguration configuration)
     {
         var cancellationToken = request.HttpContext.RequestAborted;
         var maxAttempts = BoundedLimit(configuration, "Security:UnlockAttempts:MaxPerWindow", 5, 1, 100);
@@ -265,7 +246,6 @@ internal static class SecretEndpoints
                 files.Add(OpenedFile(file, Encode(inner)));
             }
             await repository.ResetUnlockAttemptsAsync(secret.Id, cancellationToken);
-            await statistics.RecordAsync(statistics.Event(request.HttpContext, "unlock"), cancellationToken);
             return Results.Json(new OpenSecretResponse(1, message, files.ToArray()), PrivacyLinkJsonContext.Default.OpenSecretResponse);
         }
         catch (PasswordEnvelopeCapacityException)
@@ -287,7 +267,7 @@ internal static class SecretEndpoints
         catch (FormatException) { return Error(500, "server_error"); }
     }
 
-    public static async Task<IResult> OpenFile(string id, string fileId, HttpRequest request, ISecretRepository repository, IBlobStorage blobs, TimeProvider clock, StatisticsRecorder statistics)
+    public static async Task<IResult> OpenFile(string id, string fileId, HttpRequest request, ISecretRepository repository, IBlobStorage blobs, TimeProvider clock)
     {
         if (request.ContentLength is > 0 || request.Headers.ContainsKey("Transfer-Encoding")) return Error(400, "invalid_request");
         if (!ValidId(id) || !ValidId(fileId) || await repository.GetAsync(id, clock.GetUtcNow()) is not { } secret) return Error(404, "not_found");
@@ -297,7 +277,6 @@ internal static class SecretEndpoints
         try
         {
             var ciphertext = Encode(await blobs.ReadAsync(secret.Id, file.BlobId));
-            await statistics.RecordAsync(statistics.Event(request.HttpContext, "file_retrieval", bytes: file.Size), request.HttpContext.RequestAborted);
             return Results.Json(new OpenFileResponse(1, OpenedFile(file, ciphertext)), PrivacyLinkJsonContext.Default.OpenFileResponse);
         }
         catch (FileNotFoundException) { return Error(404, "not_found"); }

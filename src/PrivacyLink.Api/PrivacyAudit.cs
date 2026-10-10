@@ -27,10 +27,9 @@ internal static class PrivacyAudit
         var keyText = context.RequestServices.GetService<IConfiguration>()?["Security:AuditHashKey"];
         var configuration = context.RequestServices.GetService<IConfiguration>();
         var clientHash = "unavailable";
-        if (!string.IsNullOrWhiteSpace(keyText) && StatisticsRecorder.TryKey(keyText, out var key) &&
-            !StatisticsRecorder.KeyEquals(keyText, configuration?["Security:PasswordPepper"]) &&
-            !StatisticsRecorder.KeyEquals(keyText, configuration?["Analytics:Key"]) &&
-            StatisticsRecorder.Normalize(context.Connection.RemoteIpAddress) is { } address)
+        if (!string.IsNullOrWhiteSpace(keyText) && SecurityKeyUtilities.TryKey(keyText, out var key) &&
+            !SecurityKeyUtilities.KeyEquals(keyText, configuration?["Security:PasswordPepper"]) &&
+            SecurityKeyUtilities.Normalize(context.Connection.RemoteIpAddress) is { } address)
             clientHash = Convert.ToHexString(HMACSHA256.HashData(key, Encoding.UTF8.GetBytes(address)))[..16];
         logger.LogInformation("Privacy audit {Operation} status={StatusCode} client={ClientHash} trace={TraceId} durationMs={DurationMs}",
             operation, context.Response.StatusCode, clientHash, context.TraceIdentifier, duration?.TotalMilliseconds);

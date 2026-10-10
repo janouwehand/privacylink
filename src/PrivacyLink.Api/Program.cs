@@ -32,7 +32,6 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton<StorageHealth>();
 builder.Services.AddSingleton<PasswordEnvelopeService>();
-builder.Services.AddSingleton<StatisticsRecorder>();
 if (builder.Configuration.GetConnectionString("PrivacyLink") is not null)
 {
     builder.Services.AddSingleton<ISecretRepository, PostgresSecretRepository>();
@@ -45,7 +44,6 @@ else
 }
 builder.Services.AddHostedService<StorageInitializer>();
 builder.Services.AddHostedService<ExpiredSecretCleanup>();
-builder.Services.AddHostedService<StatisticsFinalizer>();
 builder.Services.AddRateLimiter(options =>
 {
     var createPerHour = int.TryParse(builder.Configuration["RateLimiting:CreatePerIpPerHour"], out var hour) && hour > 0 ? hour : 20;
@@ -150,22 +148,6 @@ app.Use(async (context, next) =>
     }
     await next(context);
 });
-app.Use(async (context, next) =>
-{
-    await next(context);
-    var category = context.Items["PrivacyLink.StatisticsErrorCategory"] as string ?? context.Response.StatusCode switch
-    {
-        StatusCodes.Status429TooManyRequests => "rate_limit",
-        >= 500 => "server_error",
-        >= 400 and not StatusCodes.Status404NotFound => "validation",
-        _ => null
-    };
-    if (category is not null && context.Request.Path.StartsWithSegments("/api/v1/secrets"))
-    {
-        var statistics = context.RequestServices.GetRequiredService<StatisticsRecorder>();
-        await statistics.RecordAsync(statistics.Event(context, "errors", "category", category), context.RequestAborted);
-    }
-});
 app.UseRateLimiter();
 
 // The production image contains the Angular bundle in wwwroot. Serving it from
@@ -179,14 +161,13 @@ app.MapGet("/health/ready", async (StorageHealth health, ISecretRepository repos
         ? Results.Ok(new HealthResponse("ready"))
         : Results.Json(new ErrorResponse("not_ready"), PrivacyLinkJsonContext.Default.ErrorResponse, statusCode: StatusCodes.Status503ServiceUnavailable));
 app.MapGet("/api/v1/capabilities", (IConfiguration configuration) => SecretEndpoints.Capabilities(configuration));
-app.MapGet("/api/v1/stats", async (StatisticsRecorder statistics, HttpContext context) =>
-    Results.Json(await statistics.GetDailyStatisticsAsync(context.RequestAborted), PrivacyLinkJsonContext.Default.DailyStatisticResponseArray));
-app.MapPost("/api/v1/secrets", (HttpRequest request, ISecretRepository repository, IBlobStorage blobs, PasswordEnvelopeService envelopes, TimeProvider clock, IConfiguration configuration, StatisticsRecorder statistics) => SecretEndpoints.Create(request, repository, blobs, envelopes, clock, configuration, statistics)).RequireRateLimiting("create");
+app.MapGet("/api/v1/stats", () => Results.Json(new ErrorResponse("statistics_retired"), PrivacyLinkJsonContext.Default.ErrorResponse, statusCode: StatusCodes.Status410Gone));
+app.MapPost("/api/v1/secrets", (HttpRequest request, ISecretRepository repository, IBlobStorage blobs, PasswordEnvelopeService envelopes, TimeProvider clock, IConfiguration configuration) => SecretEndpoints.Create(request, repository, blobs, envelopes, clock, configuration)).RequireRateLimiting("create");
 app.MapGet("/api/v1/secrets/{id}", (string id, ISecretRepository repository, TimeProvider clock) => SecretEndpoints.Metadata(id, repository, clock));
 app.MapPost("/api/v1/secrets/{id}/revoke", (string id, HttpRequest request, ISecretRepository repository, IBlobStorage blobs) => SecretEndpoints.Revoke(id, request, repository, blobs)).RequireRateLimiting("revoke");
-app.MapPost("/api/v1/secrets/{id}/open", (string id, HttpRequest request, ISecretRepository repository, IBlobStorage blobs, TimeProvider clock, StatisticsRecorder statistics) => SecretEndpoints.Open(id, request, repository, blobs, clock, statistics)).RequireRateLimiting("open");
-app.MapPost("/api/v1/secrets/{id}/unlock", (string id, HttpRequest request, ISecretRepository repository, IBlobStorage blobs, PasswordEnvelopeService envelopes, TimeProvider clock, IConfiguration configuration, StatisticsRecorder statistics) => SecretEndpoints.Unlock(id, request, repository, blobs, envelopes, clock, configuration, statistics)).RequireRateLimiting("unlock");
-app.MapPost("/api/v1/secrets/{id}/files/{fileId}/open", (string id, string fileId, HttpRequest request, ISecretRepository repository, IBlobStorage blobs, TimeProvider clock, StatisticsRecorder statistics) => SecretEndpoints.OpenFile(id, fileId, request, repository, blobs, clock, statistics)).RequireRateLimiting("open");
+app.MapPost("/api/v1/secrets/{id}/open", (string id, HttpRequest request, ISecretRepository repository, IBlobStorage blobs, TimeProvider clock) => SecretEndpoints.Open(id, request, repository, blobs, clock)).RequireRateLimiting("open");
+app.MapPost("/api/v1/secrets/{id}/unlock", (string id, HttpRequest request, ISecretRepository repository, IBlobStorage blobs, PasswordEnvelopeService envelopes, TimeProvider clock, IConfiguration configuration) => SecretEndpoints.Unlock(id, request, repository, blobs, envelopes, clock, configuration)).RequireRateLimiting("unlock");
+app.MapPost("/api/v1/secrets/{id}/files/{fileId}/open", (string id, string fileId, HttpRequest request, ISecretRepository repository, IBlobStorage blobs, TimeProvider clock) => SecretEndpoints.OpenFile(id, fileId, request, repository, blobs, clock)).RequireRateLimiting("open");
 app.MapFallbackToFile("index.html");
 
 app.Run();
@@ -202,7 +183,6 @@ static int PositiveLimit(IConfiguration configuration, int fallback, params stri
 
 [JsonSourceGenerationOptions(System.Text.Json.JsonSerializerDefaults.Web)]
 [JsonSerializable(typeof(HealthResponse))]
-[JsonSerializable(typeof(DailyStatisticResponse[]))]
 [JsonSerializable(typeof(FileUploadPolicyResponse))]
 [JsonSerializable(typeof(CreateSecretResponse))]
 [JsonSerializable(typeof(SecretMetadataResponse))]

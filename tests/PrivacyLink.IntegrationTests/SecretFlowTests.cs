@@ -47,15 +47,14 @@ public sealed class SecretFlowTests : IClassFixture<WebApplicationFactory<Progra
     }
 
     [Fact]
-    public async Task PublicStatisticsEndpointReturnsOnlyAggregateRows()
+    public async Task RetiredStatisticsEndpointReturnsGone()
     {
         var response = await _client.GetAsync("/api/v1/stats");
         var body = await response.Content.ReadAsStringAsync();
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
         Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
-        Assert.Equal("[]", body);
-        Assert.DoesNotContain("visitor_hmac", body, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("statistics_retired", body, StringComparison.Ordinal);
     }
 
     [Fact]

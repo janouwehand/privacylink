@@ -13,17 +13,10 @@ internal static class ProductionConfiguration
         if (string.IsNullOrWhiteSpace(configuration.GetConnectionString("PrivacyLink")))
             throw new InvalidOperationException("ConnectionStrings:PrivacyLink must be supplied in production.");
         var auditKey = configuration["Security:AuditHashKey"];
-        if (string.IsNullOrWhiteSpace(auditKey) || !StatisticsRecorder.TryKey(auditKey, out _))
+        if (string.IsNullOrWhiteSpace(auditKey) || !SecurityKeyUtilities.TryKey(auditKey, out _))
             throw new InvalidOperationException("Security:AuditHashKey must be a base64-encoded random key of at least 32 bytes in production.");
-        var analyticsKey = configuration["Analytics:Key"];
-        if (string.IsNullOrWhiteSpace(analyticsKey) || !StatisticsRecorder.TryKey(analyticsKey, out _))
-            throw new InvalidOperationException("Analytics:Key must be a base64-encoded random key of at least 32 bytes in production.");
-        if (StatisticsRecorder.KeyEquals(auditKey, analyticsKey))
-            throw new InvalidOperationException("Security:AuditHashKey and Analytics:Key must be different keys.");
         var passwordPepper = configuration["Security:PasswordPepper"];
-        if (!string.IsNullOrWhiteSpace(passwordPepper) && StatisticsRecorder.KeyEquals(analyticsKey, passwordPepper))
-            throw new InvalidOperationException("Analytics:Key must be independent from Security:PasswordPepper.");
-        if (!string.IsNullOrWhiteSpace(passwordPepper) && StatisticsRecorder.KeyEquals(auditKey, passwordPepper))
+        if (!string.IsNullOrWhiteSpace(passwordPepper) && SecurityKeyUtilities.KeyEquals(auditKey, passwordPepper))
             throw new InvalidOperationException("Security:AuditHashKey must be independent from Security:PasswordPepper.");
         if (!bool.TryParse(configuration["Security:RequireHttps"], out _))
             throw new InvalidOperationException("Security:RequireHttps must be true or false in production.");

@@ -58,7 +58,6 @@ jobs:
         shell: bash
         run: |
           echo "PRIVACYLINK_AUDIT_HASH_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
-          echo "PRIVACYLINK_ANALYTICS_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
       - name: Start production stack and wait for API readiness
         run: docker compose --project-name privacylink-ci up --build --detach --wait --wait-timeout 180
       - name: Show service state, including after failures

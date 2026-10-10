@@ -29,7 +29,6 @@ $env:ConnectionStrings__PrivacyLink = "Host=localhost;Port=5432;Database=privacy
 $env:Storage__BlobPath = "C:\privacylink-data\blobs"
 $env:Security__PasswordPepper = "<long-random-password-pepper>"
 $env:Security__AuditHashKey = "<unique-base64-random-key-at-least-32-bytes>"
-$env:Analytics__Key = "<different-unique-base64-random-key-at-least-32-bytes>"
 $env:Security__SecretStore__Provider = "Environment"
 $env:Security__RequirePasswordPepper = "true"
 $env:Security__RequireHttps = "true"
@@ -38,16 +37,16 @@ $env:AllowedHosts = "privacylink.example.com"
 # $env:Security__TrustedProxies__0 = "10.0.0.10"
 ```
 
-Generate separate random values for the password pepper, audit hash key, and analytics key. The audit hash key and analytics key must each be Base64-encoded random values of at least 32 bytes; do not reuse either as the password pepper.
+Use independent random values for the password pepper and audit hash key. The audit hash key must be a Base64-encoded random value of at least 32 bytes and must not be reused as the password pepper.
 
 ## Docker Compose
 
-The image contains both the Angular build and the .NET API. PostgreSQL runs as a separate Compose service, so its hostname in the connection string is `postgres`. Compose mounts four secret values as files: the database password, password pepper, audit hash key, and analytics key. The API uses all four; PostgreSQL uses only the database password. By default, the API binds to a host port on loopback only. The database and encrypted blobs are stored in separate volumes named per Compose project.
+The image contains both the Angular build and the .NET API. PostgreSQL runs as a separate Compose service, so its hostname in the connection string is `postgres`. Compose mounts three secret values as files: the database password, password pepper, and audit hash key. By default, the API binds to a host port on loopback only. The database and encrypted blobs are stored in separate volumes named per Compose project.
 
 ```powershell
 Copy-Item .env.example .env
-# Set all four secrets: use long, independent values for the database password and password pepper.
-# Generate a unique 32-byte Base64 value for each of the audit hash key and analytics key.
+# Set the database password and password pepper to long, independent values.
+# Generate a unique 32-byte Base64 value for the audit hash key.
 docker compose up --build -d
 ```
 
@@ -64,9 +63,9 @@ dotnet restore PrivacyLink.slnx
 dotnet run --project src/PrivacyLink.Api --urls http://localhost:5080
 ```
 
-The Development environment is recommended for local work (`$env:ASPNETCORE_ENVIRONMENT="Development"`); the API uses in-memory storage and the local development pepper by default in that environment. In production, the API requires a PostgreSQL connection string, an absolute blob root, `Security:PasswordPepper` from Environment configuration, `Security:AuditHashKey`, `Analytics:Key`, `Security:RequirePasswordPepper=true`, an explicit `Security:RequireHttps` value, and explicit `AllowedHosts`. Configure `Security:TrustedProxies` with the proxy's exact IP address when TLS terminates at a proxy. Do not trust `X-Forwarded-*` headers without an explicit proxy IP.
+The Development environment is recommended for local work (`$env:ASPNETCORE_ENVIRONMENT="Development"`); the API uses in-memory storage and the local development pepper by default in that environment. In production, the API requires a PostgreSQL connection string, an absolute blob root, `Security:PasswordPepper` from Environment configuration, `Security:AuditHashKey`, `Security:RequirePasswordPepper=true`, an explicit `Security:RequireHttps` value, and explicit `AllowedHosts`. Configure `Security:TrustedProxies` with the proxy's exact IP address when TLS terminates at a proxy. Do not trust `X-Forwarded-*` headers without an explicit proxy IP.
 
-Application privacy audit records include the operation, status, trace ID, and duration. When a valid `Security:AuditHashKey` is configured (required in production), the record also includes a truncated HMAC-SHA-256 of the client IP; without a valid key, the client field is `unavailable`. The application does not log request bodies, passwords, keys, or secret IDs. Product analytics also records daily keyed HMACs of client IPs for aggregate unique-visitor counts; it does not put raw IP addresses in the statistics tables. These visitor HMAC rows are retained indefinitely. Matching HMACs can be linked across days even without the key; the key also allows a holder to check a candidate IP against stored HMACs. The application uses client IPs for in-memory rate limiting as well. This does not describe logs produced by the hosting platform, proxy, or infrastructure. Default limits for request body size, files, Argon2, and rate limiting are security limits and should only be changed deliberately.
+Application privacy audit records include the operation, status, trace ID, and duration. When a valid `Security:AuditHashKey` is configured (required in production), the record also includes a truncated HMAC-SHA-256 of the client IP; without a valid key, the client field is `unavailable`. The application does not log request bodies, passwords, keys, or secret IDs. Product statistics collection has been retired; `/stats` reports that statistics are temporarily unavailable and `/api/v1/stats` returns HTTP 410. The application uses client IPs for in-memory rate limiting as well. This does not describe logs produced by the hosting platform, proxy, or infrastructure. Default limits for request body size, files, Argon2, and rate limiting are security limits and should only be changed deliberately.
 
 Start the frontend in a second terminal:
 
