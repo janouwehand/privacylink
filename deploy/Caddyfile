@@ -6,10 +6,6 @@ plstaging.softable.nl {
 	reverse_proxy 127.0.0.1:8081
 }
 
-feature.privacylink.nl {
-	encode zstd gzip
-	reverse_proxy 127.0.0.1:8082
-}
 
 privacylink.nl {
 	encode zstd gzip
