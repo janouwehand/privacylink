@@ -10,17 +10,25 @@ case "$environment" in
     project='privacylink-staging'
     port='8081'
     health_host='plstaging.softable.nl'
+    image_name='ghcr.io/janouwehand/privacylink'
     ;;
   production)
     project='privacylink-production'
     port='8080'
     health_host='privacylink.nl'
+    image_name='ghcr.io/janouwehand/privacylink'
     ;;
-  *) echo 'Environment must be staging or production.' >&2; exit 64 ;;
+  feature)
+    project='privacylink-feature'
+    port='8082'
+    health_host='feature.privacylink.nl'
+    image_name='ghcr.io/janouwehand/privacylink-feature'
+    ;;
+  *) echo 'Environment must be staging, production, or feature.' >&2; exit 64 ;;
 esac
 
-if [[ ! "$image" =~ ^ghcr\.io/janouwehand/privacylink@sha256:[a-f0-9]{64}$ ]]; then
-  echo 'Image must be the expected GHCR image pinned by a SHA-256 digest.' >&2
+if [[ "$image" != "$image_name"@sha256:* || ! "${image#*@sha256:}" =~ ^[a-f0-9]{64}$ ]]; then
+  echo "Image must be $image_name pinned by a SHA-256 digest." >&2
   exit 64
 fi
 

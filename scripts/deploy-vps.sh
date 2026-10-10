@@ -5,12 +5,13 @@ environment="${1:-}"
 image="${2:-}"
 
 case "$environment" in
-  staging|production) ;;
-  *) echo 'Environment must be staging or production.' >&2; exit 64 ;;
+  staging|production) image_name='ghcr.io/janouwehand/privacylink' ;;
+  feature) image_name='ghcr.io/janouwehand/privacylink-feature' ;;
+  *) echo 'Environment must be staging, production, or feature.' >&2; exit 64 ;;
 esac
 
-if [[ ! "$image" =~ ^ghcr\.io/janouwehand/privacylink@sha256:[a-f0-9]{64}$ ]]; then
-  echo 'Image must be the expected GHCR image pinned by a SHA-256 digest.' >&2
+if [[ "$image" != "$image_name"@sha256:* || ! "${image#*@sha256:}" =~ ^[a-f0-9]{64}$ ]]; then
+  echo "Image must be $image_name pinned by a SHA-256 digest." >&2
   exit 64
 fi
 
