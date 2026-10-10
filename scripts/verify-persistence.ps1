@@ -11,7 +11,6 @@ $apiProcess = $null
 $oldConnection = $env:ConnectionStrings__PrivacyLink
 $oldBlobPath = $env:Storage__BlobPath
 $oldEnvironment = $env:ASPNETCORE_ENVIRONMENT
-$oldAnalyticsKey = $env:Analytics__Key
 
 function Invoke-Docker([string[]] $Arguments) {
     & docker @Arguments
@@ -35,10 +34,6 @@ try {
     $env:ConnectionStrings__PrivacyLink = "Host=127.0.0.1;Port=$hostPort;Database=privacylink;Username=privacylink;Password=persistence-test-only"
     $env:Storage__BlobPath = $blobPath
     $env:ASPNETCORE_ENVIRONMENT = 'Development'
-    $analyticsKeyBytes = [byte[]]::new(32)
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($analyticsKeyBytes)
-    $env:Analytics__Key = [Convert]::ToBase64String($analyticsKeyBytes)
-    [Array]::Clear($analyticsKeyBytes, 0, $analyticsKeyBytes.Length)
     $apiLog = Join-Path $runRoot 'api.log'
     $apiErrorLog = Join-Path $runRoot 'api-error.log'
     $apiProcess = Start-Process dotnet -ArgumentList 'run --project src/PrivacyLink.Api/PrivacyLink.Api.csproj --no-launch-profile --urls http://127.0.0.1:5089' -WorkingDirectory $repoRoot -RedirectStandardOutput $apiLog -RedirectStandardError $apiErrorLog -WindowStyle Hidden -PassThru
@@ -57,12 +52,8 @@ try {
     $created = Invoke-RestMethod 'http://127.0.0.1:5089/api/v1/secrets' -Method Post -ContentType 'application/json' -Body $payload
     if ([string]::IsNullOrWhiteSpace($created.id)) { throw 'API did not create a persistence test secret.' }
 
-    $creationCount = (& docker exec $container psql -U privacylink -d privacylink -tAc "SELECT COALESCE(SUM(count), 0) FROM stats_daily WHERE day = (NOW() AT TIME ZONE 'UTC')::date AND metric = 'creations' AND dimension = '' AND dimension_value = ''").Trim()
-    if ($creationCount -ne '1') { throw "Expected one committed creation statistic, got '$creationCount'." }
-    $visitorCount = (& docker exec $container psql -U privacylink -d privacylink -tAc "SELECT COUNT(*) FROM stats_visitors_daily WHERE day = (NOW() AT TIME ZONE 'UTC')::date").Trim()
-    if ($visitorCount -ne '1') { throw "Expected one daily HMAC visitor row, got '$visitorCount'." }
-    $visitorHashLength = (& docker exec $container psql -U privacylink -d privacylink -tAc "SELECT MIN(octet_length(visitor_hmac)) FROM stats_visitors_daily WHERE day = (NOW() AT TIME ZONE 'UTC')::date").Trim()
-    if ($visitorHashLength -ne '32') { throw "Expected a 32-byte visitor HMAC, got '$visitorHashLength'." }
+    $legacyStatsTables = (& docker exec $container psql -U privacylink -d privacylink -tAc "SELECT (to_regclass('public.stats_daily') IS NULL AND to_regclass('public.stats_visitors_daily') IS NULL)").Trim()
+    if ($legacyStatsTables -ne 't') { throw 'Legacy statistics tables still exist after startup migrations.' }
 
     Invoke-Docker @('exec', $container, 'sh', '-c', 'pg_dump -U privacylink -Fc privacylink > /tmp/metadata.dump')
     Invoke-Docker @('cp', "${container}:/tmp/metadata.dump", $dumpPath)
@@ -87,6 +78,5 @@ finally {
     $env:ConnectionStrings__PrivacyLink = $oldConnection
     $env:Storage__BlobPath = $oldBlobPath
     $env:ASPNETCORE_ENVIRONMENT = $oldEnvironment
-    $env:Analytics__Key = $oldAnalyticsKey
     if (Test-Path $runRoot) { Remove-Item -LiteralPath $runRoot -Recurse -Force }
 }

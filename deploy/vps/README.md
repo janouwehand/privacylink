@@ -24,7 +24,7 @@ Whenever `compose.yaml` or the server deploy command changes, install the review
 
 Create `/etc/privacylink/staging.env` and `/etc/privacylink/production.env` as root-owned files with mode `0600`. Each file must define:
 
-- Independent values for `POSTGRES_PASSWORD`, `PRIVACYLINK_PASSWORD_PEPPER`, `PRIVACYLINK_AUDIT_HASH_KEY`, and `PRIVACYLINK_ANALYTICS_KEY`. Generate unique values per environment. The audit and analytics values must each be Base64-encoded random values of at least 32 bytes.
+- Independent values for `POSTGRES_PASSWORD`, `PRIVACYLINK_PASSWORD_PEPPER`, and `PRIVACYLINK_AUDIT_HASH_KEY`. Generate unique values per environment. The audit hash key must be a Base64-encoded random value of at least 32 bytes.
 - `ASPNETCORE_ENVIRONMENT=Production`.
 - `PRIVACYLINK_ALLOWED_HOSTS=plstaging.softable.nl` for staging and `PRIVACYLINK_ALLOWED_HOSTS=privacylink.nl` for production.
 - `PRIVACYLINK_REQUIRE_HTTPS=false`, because Caddy terminates HTTPS and forwards to the loopback-only HTTP port.

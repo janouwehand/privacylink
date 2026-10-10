@@ -1,7 +1,6 @@
 namespace PrivacyLink.Contracts;
 
 public sealed record HealthResponse(string Status);
-public sealed record DailyStatisticResponse(DateOnly Day, string Metric, string Dimension, string DimensionValue, long Count, long Bytes);
 public sealed record FileUploadPolicyResponse(int MaxFiles, long MaxTotalFileBytes, string[] AllowedFileExtensions);
 public sealed record MessageCiphertext(string Nonce, string Ciphertext);
 public sealed record FileMetadataResponse(string Id, string Extension, string NameNonce, string NameCiphertext, string MimeType, long Size);

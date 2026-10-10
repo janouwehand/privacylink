@@ -14,7 +14,6 @@ services:
       Security__AuditHashKey_FILE: /run/secrets/audit_hash_key
       Security__SecretStore__Provider: Environment
       Security__RequireHttps: "${PRIVACYLINK_REQUIRE_HTTPS:-false}"
-      Analytics__Key_FILE: /run/secrets/analytics_key
       Security__TrustedProxies__0: "${PRIVACYLINK_TRUSTED_PROXY_0:-}"
       Storage__BlobPath: /app/data/blobs
       AllowedHosts: "${PRIVACYLINK_ALLOWED_HOSTS:?Set PRIVACYLINK_ALLOWED_HOSTS in .env}"
@@ -29,7 +28,6 @@ services:
       - postgres_password
       - password_pepper
       - audit_hash_key
-      - analytics_key
     depends_on:
       postgres:
         condition: service_healthy
@@ -71,5 +69,3 @@ secrets:
     environment: PRIVACYLINK_PASSWORD_PEPPER
   audit_hash_key:
     environment: PRIVACYLINK_AUDIT_HASH_KEY
-  analytics_key:
-    environment: PRIVACYLINK_ANALYTICS_KEY

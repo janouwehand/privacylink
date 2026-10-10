@@ -27,7 +27,7 @@ The development server runs at `http://localhost:4200`. Its proxy forwards `/api
 | `/` | Create a secure link and show its result |
 | `/history` | View and manage links stored in this browser |
 | `/security` | Explain the encryption and link protocol |
-| `/stats` | View public product totals |
+| `/stats` | Explain that statistics are temporarily unavailable |
 | `/s/:id` | Check a shared link and open its content on user action |
 | Other paths | Show the translated not-found screen |
 
