@@ -9,7 +9,7 @@ case "$environment" in
   *) echo 'Environment must be staging or production.' >&2; exit 64 ;;
 esac
 
-if [[ ! "$image" =~ ^ghcr\\.io/janouwehand/privacylink@sha256:[a-f0-9]{64}$ ]]; then
+if [[ ! "$image" =~ ^ghcr\.io/janouwehand/privacylink@sha256:[a-f0-9]{64}$ ]]; then
   echo 'Image must be the expected GHCR image pinned by a SHA-256 digest.' >&2
   exit 64
 fi
