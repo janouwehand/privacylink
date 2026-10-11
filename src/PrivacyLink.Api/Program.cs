@@ -17,7 +17,7 @@ SecretStoreConfiguration.ApplyFileSecrets(builder.Configuration);
 ProductionConfiguration.Validate(builder.Configuration, builder.Environment.IsProduction());
 builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.TypeInfoResolverChain.Insert(0, PrivacyLinkJsonContext.Default));
-var maxRequestBytes = int.TryParse(builder.Configuration["Limits:MaxRequestBytes"], out var configuredRequestBytes) && configuredRequestBytes > 0 ? configuredRequestBytes : 384 * 1024;
+var maxRequestBytes = int.TryParse(builder.Configuration["Limits:MaxRequestBytes"], out var configuredRequestBytes) && configuredRequestBytes > 0 ? configuredRequestBytes : 110 * 1024 * 1024;
 builder.WebHost.ConfigureKestrel(options =>
 {
     options.Limits.MaxRequestBodySize = maxRequestBytes;

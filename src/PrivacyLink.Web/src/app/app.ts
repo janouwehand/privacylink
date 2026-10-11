@@ -6,6 +6,7 @@ import { HistoryState } from './history/history-state';
 import { LanguageState } from './language-state';
 import { PasswordGenerator } from './password-generator/password-generator';
 import { APP_VERSION } from './app-version';
+import { WorkProgressState } from './work-progress-state';
 
 @Component({
   selector: 'app-root',
@@ -18,12 +19,14 @@ export class App implements AfterViewInit {
   protected readonly create = inject(CreateState);
   protected readonly history = inject(HistoryState);
   protected readonly language = inject(LanguageState);
+  protected readonly workProgress = inject(WorkProgressState);
 
   @ViewChild('passwordCopyDialog') private passwordCopyDialog?: ElementRef<HTMLDialogElement>;
   @ViewChild('emptyMessageDialog') private emptyMessageDialog?: ElementRef<HTMLDialogElement>;
   @ViewChild('historyActionDialog') private historyActionDialog?: ElementRef<HTMLDialogElement>;
   @ViewChild('clearHistoryDialog') private clearHistoryDialog?: ElementRef<HTMLDialogElement>;
   @ViewChild('passwordGeneratorDialog') private passwordGeneratorDialog?: ElementRef<HTMLDialogElement>;
+  @ViewChild('workProgressDialog') private workProgressDialog?: ElementRef<HTMLDialogElement>;
 
   constructor() {
     effect(() => this.syncDialog(this.passwordCopyDialog?.nativeElement, this.create.passwordCopyDialogOpen()));
@@ -31,6 +34,7 @@ export class App implements AfterViewInit {
     effect(() => this.syncDialog(this.historyActionDialog?.nativeElement, this.history.historyActionDialogOpen()));
     effect(() => this.syncDialog(this.clearHistoryDialog?.nativeElement, this.history.clearHistoryDialogOpen()));
     effect(() => this.syncDialog(this.passwordGeneratorDialog?.nativeElement, this.create.passwordGeneratorOpen()));
+    effect(() => this.syncDialog(this.workProgressDialog?.nativeElement, this.workProgress.visible()));
   }
 
   ngAfterViewInit(): void {
@@ -39,6 +43,7 @@ export class App implements AfterViewInit {
     this.syncDialog(this.historyActionDialog?.nativeElement, this.history.historyActionDialogOpen());
     this.syncDialog(this.clearHistoryDialog?.nativeElement, this.history.clearHistoryDialogOpen());
     this.syncDialog(this.passwordGeneratorDialog?.nativeElement, this.create.passwordGeneratorOpen());
+    this.syncDialog(this.workProgressDialog?.nativeElement, this.workProgress.visible());
   }
 
   private syncDialog(dialog: HTMLDialogElement | undefined, shouldOpen: boolean): void {

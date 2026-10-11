@@ -13,6 +13,14 @@ async function responseJson<T>(response: Response): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function responseArrayBuffer(response: Response): Promise<ArrayBuffer> {
+  if (!response.ok) {
+    const retryAfter = Number.parseInt(response.headers.get('Retry-After') ?? '', 10);
+    throw new SecretApiError(response.status, Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null);
+  }
+  return response.arrayBuffer();
+}
+
 function delay(milliseconds: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
@@ -26,6 +34,9 @@ export class SecretApi {
   create(request: { protocolVersion: 1; expiry: '1d' | '7d' | '14d'; message: EncryptedMessage | null; files: EncryptedFile[]; password?: string }): Promise<{ id: string; expiresAt: string; passwordProtected: boolean; revokeToken: string }> {
     return fetch('/api/v1/secrets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request), cache: 'no-store', referrerPolicy: 'no-referrer' }).then(response => responseJson<{ id: string; expiresAt: string; passwordProtected: boolean; revokeToken: string }>(response));
   }
+  createSerialized(body: ArrayBuffer): Promise<{ id: string; expiresAt: string; passwordProtected: boolean; revokeToken: string }> {
+    return fetch('/api/v1/secrets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, cache: 'no-store', referrerPolicy: 'no-referrer' }).then(response => responseJson<{ id: string; expiresAt: string; passwordProtected: boolean; revokeToken: string }>(response));
+  }
   revoke(id: string, revokeToken: string): Promise<void> {
     return fetch(`/api/v1/secrets/${SecretApi.pathPart(id)}/revoke`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ revokeToken }), cache: 'no-store', referrerPolicy: 'no-referrer' }).then(response => {
       // Revocation is idempotent from History's perspective: 404 means the secret is already absent.
@@ -38,11 +49,18 @@ export class SecretApi {
   open(id: string): Promise<EncryptedPayload> {
     return fetch(`/api/v1/secrets/${SecretApi.pathPart(id)}/open`, { method: 'POST', cache: 'no-store', referrerPolicy: 'no-referrer' }).then(response => responseJson<EncryptedPayload>(response));
   }
+  openRaw(id: string): Promise<ArrayBuffer> {
+    return fetch(`/api/v1/secrets/${SecretApi.pathPart(id)}/open`, { method: 'POST', cache: 'no-store', referrerPolicy: 'no-referrer' }).then(responseArrayBuffer);
+  }
   unlock(id: string, password: string): Promise<EncryptedPayload> {
-    return this.unlockWithRetry(id, password);
+    return this.unlockWithRetry(id, password, response => responseJson<EncryptedPayload>(response));
   }
 
-  private async unlockWithRetry(id: string, password: string): Promise<EncryptedPayload> {
+  unlockRaw(id: string, password: string): Promise<ArrayBuffer> {
+    return this.unlockWithRetry(id, password, responseArrayBuffer);
+  }
+
+  private async unlockWithRetry<T>(id: string, password: string, readResponse: (response: Response) => Promise<T>): Promise<T> {
     for (let attempt = 0; ; attempt++) {
       const response = await fetch(`/api/v1/secrets/${SecretApi.pathPart(id)}/unlock`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }), cache: 'no-store', referrerPolicy: 'no-referrer' });
       if (response.status === 503 && attempt < 2) {
@@ -51,10 +69,13 @@ export class SecretApi {
         await delay(Math.min(backoff, 5000) + Math.floor(Math.random() * 250));
         continue;
       }
-      return responseJson<EncryptedPayload>(response);
+      return readResponse(response);
     }
   }
   openFile(id: string, fileId: string): Promise<{ protocolVersion: number; file: OpenedFile }> {
     return fetch(`/api/v1/secrets/${SecretApi.pathPart(id)}/files/${SecretApi.pathPart(fileId)}/open`, { method: 'POST', cache: 'no-store', referrerPolicy: 'no-referrer' }).then(response => responseJson(response));
+  }
+  openFileRaw(id: string, fileId: string): Promise<ArrayBuffer> {
+    return fetch(`/api/v1/secrets/${SecretApi.pathPart(id)}/files/${SecretApi.pathPart(fileId)}/open`, { method: 'POST', cache: 'no-store', referrerPolicy: 'no-referrer' }).then(responseArrayBuffer);
   }
 }

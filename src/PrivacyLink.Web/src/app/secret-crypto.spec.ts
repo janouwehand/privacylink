@@ -19,3 +19,19 @@ describe('file encryption metadata', () => {
     await expect(decryptFile({ ...encrypted, extension: '.txt' }, clientKey)).rejects.toThrow();
   });
 });
+
+describe('canonical base64url encoding', () => {
+  it('rejects non-canonical unused tail bits and invalid lengths', () => {
+    expect(decodeCanonical('AA')).toEqual(new Uint8Array([0]));
+    expect(decodeCanonical('AAA')).toEqual(new Uint8Array([0, 0]));
+    expect(() => decodeCanonical('AB')).toThrow('invalid canonical encoding');
+    expect(() => decodeCanonical('AAB')).toThrow('invalid canonical encoding');
+    expect(() => decodeCanonical('A')).toThrow('invalid base64url');
+  });
+
+  it('round-trips a moderate payload through bounded Base64 chunks', () => {
+    const bytes = Uint8Array.from({ length: 1024 * 1024 + 17 }, (_, index) => index % 251);
+    const encoded = encodeBase64Url(bytes);
+    expect(decodeCanonical(encoded, bytes.length)).toEqual(bytes);
+  });
+});

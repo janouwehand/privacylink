@@ -4,8 +4,10 @@ import { AppState } from '../app-state';
 import { LinkSharingState } from '../link-sharing-state';
 import { LanguageState } from '../language-state';
 import { SecretApi } from '../secret-api';
-import { decodeCanonical, derivePasswordToken, encryptFile, encryptMessage } from '../secret-crypto';
+import { decodeCanonical, derivePasswordToken, encryptMessage } from '../secret-crypto';
 import { SecretHistoryStore } from '../secret-history-store';
+import { WorkProgressState } from '../work-progress-state';
+import { getSecretCryptoWorkerClient } from '../secret-crypto-worker-client';
 import type { TranslatableError } from '../translations';
 
 type Expiry = '1d' | '7d' | '14d';
@@ -21,6 +23,7 @@ export class CreateState {
   private readonly history = inject(SecretHistoryStore);
   private readonly language = inject(LanguageState);
   private readonly sharing = inject(LinkSharingState);
+  private readonly workProgress = inject(WorkProgressState);
   private readonly document = inject(DOCUMENT);
   private passwordCopiedTimeout: ReturnType<typeof setTimeout> | undefined;
 
@@ -64,16 +67,16 @@ export class CreateState {
 
   fileLimitHint(): string {
     const policy = this.filePolicy();
-    const maxFiles = policy?.maxFiles ?? 10;
-    const maxTotal = this.language.formatFileSize(policy?.maxTotalFileBytes ?? 25 * 1024 * 1024);
+    const maxFiles = policy?.maxFiles ?? 15;
+    const maxTotal = this.language.formatFileSize(policy?.maxTotalFileBytes ?? 75 * 1024 * 1024);
     return this.language.t('fileLimitHint', { maxFiles, maxTotal });
   }
 
-  fileCountLimit(): number { return this.filePolicy()?.maxFiles ?? 10; }
+  fileCountLimit(): number { return this.filePolicy()?.maxFiles ?? 15; }
 
   fileUsageSummary(): string {
     const totalBytes = this.selectedFiles().reduce((total, file) => total + file.size, 0);
-    const maxBytes = this.filePolicy()?.maxTotalFileBytes ?? 25 * 1024 * 1024;
+    const maxBytes = this.filePolicy()?.maxTotalFileBytes ?? 75 * 1024 * 1024;
     return this.language.t('fileUsageSummary', {
       selected: this.selectedFiles().length,
       maxFiles: this.fileCountLimit(),
@@ -153,7 +156,7 @@ export class CreateState {
       knownFiles.add(identity);
       return true;
     });
-    const maxFiles = policy?.maxFiles ?? 10;
+    const maxFiles = policy?.maxFiles ?? 15;
     const available = Math.max(0, maxFiles - current.length);
     const overCount = unique.slice(available);
     const candidates = unique.slice(0, available);
@@ -200,16 +203,20 @@ export class CreateState {
     }
 
     this.busy.set(true);
+    const filesToEncrypt = this.selectedFiles();
+    this.workProgress.begin('create', filesToEncrypt.map(file => file.name));
     try {
       const encrypted = await encryptMessage(this.message());
-      const files = await Promise.all(this.selectedFiles().map(file => encryptFile(file, decodeCanonical(encrypted.clientKey, 32))));
-      const created = await this.api.create({
+      const clientKey = decodeCanonical(encrypted.clientKey, 32);
+      const requestWithoutFiles = {
         protocolVersion: 1,
         expiry: this.expiry(),
         message: this.message().trim() ? encrypted.message : null,
-        files,
         ...(this.password() ? { password: await derivePasswordToken(this.password(), encrypted.clientKey) } : {})
-      });
+      } as const;
+      const created = filesToEncrypt.length
+        ? await this.createFilesWithWorker(requestWithoutFiles, filesToEncrypt, clientKey)
+        : await this.api.create({ ...requestWithoutFiles, files: [] });
       decodeCanonical(created.id, 16);
       this.shareLink.set(`${this.document.location.origin}/s/${created.id}#${encrypted.clientKey}`);
       this.expiresAt.set(created.expiresAt);
@@ -232,7 +239,26 @@ export class CreateState {
       this.setError({ key: 'failure' });
     } finally {
       this.busy.set(false);
+      this.workProgress.finish();
     }
+  }
+
+  private async createFilesWithWorker(
+    request: { protocolVersion: 1; expiry: Expiry; message: { nonce: string; ciphertext: string } | null; password?: string },
+    files: File[],
+    clientKey: Uint8Array
+  ): Promise<{ id: string; expiresAt: string; passwordProtected: boolean; revokeToken: string }> {
+    const body = await getSecretCryptoWorkerClient().encryptFilesAndSerialize(request, files, clientKey, progress => {
+      if (progress.phase === 'encoding' && !progress.filename) {
+        files.forEach((_, index) => this.workProgress.setFileStatus(index, 'done'));
+        return;
+      }
+      for (let index = 0; index < progress.current - 1; index++) this.workProgress.setFileStatus(index, 'done');
+      if (progress.current <= files.length) this.workProgress.setFileStatus(progress.current - 1, 'processing');
+    });
+    files.forEach((_, index) => this.workProgress.setFileStatus(index, 'done'));
+    this.workProgress.setStage('uploading');
+    return this.api.createSerialized(body);
   }
 
   async copy(): Promise<void> {

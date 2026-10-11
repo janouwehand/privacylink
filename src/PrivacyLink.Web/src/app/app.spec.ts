@@ -11,17 +11,62 @@ import { RecipientState } from './recipient/recipient-state';
 import { RecipientPage } from './recipient/recipient-page';
 import { SecretApi } from './secret-api';
 import { SecretHistoryStore } from './secret-history-store';
-import { encryptMessage } from './secret-crypto';
+import { decodeCanonical, decryptFile, decryptFileName, decryptMessage, encryptFile, encryptMessage } from './secret-crypto';
+
+class InlineCryptoWorker extends EventTarget {
+  postMessage(message: { id: number; operation: string; payload: unknown; clientKey: string | Uint8Array }): void {
+    void (async () => {
+      let result: unknown;
+      if (message.operation === 'decryptOpenSecretResponse') {
+        const payload = JSON.parse(new TextDecoder().decode(message.payload as ArrayBuffer));
+        const text = payload.message ? await decryptMessage(payload, message.clientKey as string) : null;
+        const files = await Promise.all(payload.files.map(async (file: Parameters<typeof decryptFileName>[0]) => ({
+          id: file.id,
+          extension: file.extension,
+          name: await decryptFileName(file, message.clientKey as string),
+          mimeType: file.mimeType,
+          size: file.size
+        })));
+        result = { token: 'test-cache-token', message: text, files };
+      } else if (message.operation === 'decryptOpenFileResponse') {
+        const payload = JSON.parse(new TextDecoder().decode(message.payload as ArrayBuffer));
+        const filename = await decryptFileName(payload.file, message.clientKey as string);
+        const data = await decryptFile(payload.file, message.clientKey as string);
+        result = { filename, mimeType: payload.file.mimeType, data: data.buffer };
+      } else if (message.operation === 'decryptFileName') {
+        result = await decryptFileName(message.payload as Parameters<typeof decryptFileName>[0], message.clientKey as string);
+      } else if (message.operation === 'encryptFilesAndSerialize') {
+        const input = message.payload as { request: Record<string, unknown>; files: File[] };
+        const files = [];
+        for (const file of input.files) files.push(await encryptFile(file, message.clientKey as Uint8Array));
+        result = new TextEncoder().encode(JSON.stringify({ ...input.request, files })).buffer;
+      } else if (message.operation === 'clearCachedFiles') {
+        result = undefined;
+      } else {
+        throw new Error(`Unexpected worker operation: ${message.operation}`);
+      }
+      this.dispatchEvent(new MessageEvent('message', { data: { id: message.id, type: 'result', result } }));
+    })().catch(error => this.dispatchEvent(new MessageEvent('message', {
+      data: { id: message.id, type: 'error', error: error instanceof Error ? error.message : 'worker error' }
+    })));
+  }
+
+  terminate(): void {}
+}
 
 function createSecretApiStub() {
   return {
-    getFileUploadPolicy: vi.fn().mockResolvedValue({ maxFiles: 10, maxTotalFileBytes: 25 * 1024 * 1024, allowedFileExtensions: ['.txt'] }),
+    getFileUploadPolicy: vi.fn().mockResolvedValue({ maxFiles: 15, maxTotalFileBytes: 75 * 1024 * 1024, allowedFileExtensions: ['.txt'] }),
     create: vi.fn().mockResolvedValue({ id: 'AAAAAAAAAAAAAAAAAAAAAA', expiresAt: '2030-01-01T00:00:00.000Z', passwordProtected: false, revokeToken: 'test-revoke-token' }),
+    createSerialized: vi.fn((_body: ArrayBuffer) => Promise.resolve({ id: 'AAAAAAAAAAAAAAAAAAAAAA', expiresAt: '2030-01-01T00:00:00.000Z', passwordProtected: false, revokeToken: 'test-revoke-token' })),
     revoke: vi.fn().mockResolvedValue(undefined),
     getMetadata: vi.fn().mockResolvedValue({ exists: true, protocolVersion: 1, expiresAt: '2030-01-01T00:00:00.000Z', passwordProtected: false, hasMessage: true, fileCount: 0, files: [] }),
     open: vi.fn(),
+    openRaw: vi.fn(),
     unlock: vi.fn(),
-    openFile: vi.fn()
+    unlockRaw: vi.fn(),
+    openFile: vi.fn(),
+    openFileRaw: vi.fn()
   };
 }
 
@@ -30,6 +75,7 @@ describe('App', () => {
 
   beforeEach(async () => {
     localStorage.clear();
+    vi.stubGlobal('Worker', InlineCryptoWorker);
     api = createSecretApiStub();
     await TestBed.configureTestingModule({
       imports: [App],
@@ -88,15 +134,33 @@ describe('App', () => {
     const fixture = await renderApp();
     const create = TestBed.inject(CreateState);
     const language = TestBed.inject(LanguageState);
-    create.setError({ key: 'tooManyFiles', params: { max: 10 } });
+    create.setError({ key: 'tooManyFiles', params: { max: 15 } });
     fixture.detectChanges();
 
     const compiled = fixture.nativeElement as HTMLElement;
-    expect(compiled.querySelector('.error')?.textContent).toContain('You can add at most 10 files.');
+    expect(compiled.querySelector('.error')?.textContent).toContain('You can add at most 15 files.');
 
     language.setLanguage('nl');
     fixture.detectChanges();
-    expect(compiled.querySelector('.error')?.textContent).toContain('Je kunt maximaal 10 bestanden toevoegen.');
+    expect(compiled.querySelector('.error')?.textContent).toContain('Je kunt maximaal 15 bestanden toevoegen.');
+  });
+
+  it('encrypts selected files and serializes the upload through the worker', async () => {
+    const fixture = await renderApp();
+    const create = TestBed.inject(CreateState);
+    (create as unknown as { setFiles(files: File[], append?: boolean): void }).setFiles([new File(['hello'], 'hello.txt', { type: 'text/plain' })]);
+
+    await create.create();
+    fixture.detectChanges();
+
+    expect(api.create).not.toHaveBeenCalled();
+    expect(api.createSerialized).toHaveBeenCalledOnce();
+    const body = api.createSerialized.mock.calls[0]?.[0];
+    expect(Object.prototype.toString.call(body)).toBe('[object ArrayBuffer]');
+    const request = JSON.parse(new TextDecoder().decode(body));
+    expect(request.files).toHaveLength(1);
+    expect(request.files[0].extension).toBe('.txt');
+    expect((fixture.nativeElement as HTMLElement).querySelector('h1')?.textContent).toContain('Your secure link is ready.');
   });
 
   it('waits for an explicit unlock action and renders decrypted content as text', async () => {
@@ -104,7 +168,7 @@ describe('App', () => {
     const encrypted = await encryptMessage(messageText);
     const id = 'AAAAAAAAAAAAAAAAAAAAAA';
     api.getMetadata.mockResolvedValue({ exists: true, protocolVersion: 1, expiresAt: '2030-01-01T00:00:00.000Z', passwordProtected: true, hasMessage: true, fileCount: 0, files: [] });
-    api.unlock.mockResolvedValue({ protocolVersion: 1, message: encrypted.message, files: [] });
+    api.unlockRaw.mockResolvedValue(new TextEncoder().encode(JSON.stringify({ protocolVersion: 1, message: encrypted.message, files: [] })).buffer);
     const fixture = await renderApp(`/s/${id}#${encrypted.clientKey}`);
     const recipient = fixture.debugElement.query(By.directive(RecipientPage)).injector.get(RecipientState);
     await vi.waitFor(() => expect(recipient.metadataReady()).toBe(true));
@@ -119,7 +183,7 @@ describe('App', () => {
     password!.dispatchEvent(new Event('input'));
     fixture.detectChanges();
     (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('.card .primary')!.click();
-    await vi.waitFor(() => expect(api.unlock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(api.unlockRaw).toHaveBeenCalledTimes(1));
     await fixture.whenStable();
     fixture.detectChanges();
 
@@ -127,8 +191,66 @@ describe('App', () => {
     const message = compiled.querySelector('.message-display');
     expect(message?.textContent).toBe(messageText);
     expect(message?.querySelector('img, script')).toBeNull();
-    expect(api.unlock.mock.calls[0]?.[0]).toBe(id);
+    expect(api.unlockRaw.mock.calls[0]?.[0]).toBe(id);
     expect(api.open).not.toHaveBeenCalled();
+  });
+
+  it('opens unprotected content through the worker using the raw response', async () => {
+    const encrypted = await encryptMessage('Worker opened this message');
+    const id = 'AAAAAAAAAAAAAAAAAAAAAA';
+    api.openRaw.mockResolvedValue(new TextEncoder().encode(JSON.stringify({ protocolVersion: 1, message: encrypted.message, files: [] })).buffer);
+    const fixture = await renderApp(`/s/${id}#${encrypted.clientKey}`);
+    const recipient = fixture.debugElement.query(By.directive(RecipientPage)).injector.get(RecipientState);
+    await vi.waitFor(() => expect(recipient.metadataReady()).toBe(true));
+
+    await recipient.open();
+    fixture.detectChanges();
+
+    expect(api.openRaw).toHaveBeenCalledWith(id);
+    expect(api.open).not.toHaveBeenCalled();
+    expect(recipient.openedMessage()).toBe('Worker opened this message');
+    expect(recipient.opened()).toBe(true);
+  });
+
+  it('keeps metadata files visible when the unprotected open response only contains the message', async () => {
+    const encrypted = await encryptMessage('Message with files');
+    const key = decodeCanonical(encrypted.clientKey, 32);
+    const encryptedFiles = await Promise.all([
+      encryptFile(new File(['first'], 'first.pdf', { type: 'application/pdf' }), key),
+      encryptFile(new File(['second'], 'second.pdf', { type: 'application/pdf' }), key)
+    ]);
+    const id = 'AAAAAAAAAAAAAAAAAAAAAA';
+    api.getMetadata.mockResolvedValue({
+      exists: true,
+      protocolVersion: 1,
+      expiresAt: '2030-01-01T00:00:00.000Z',
+      passwordProtected: false,
+      hasMessage: true,
+      fileCount: encryptedFiles.length,
+      files: encryptedFiles
+    });
+    api.openRaw.mockResolvedValue(new TextEncoder().encode(JSON.stringify({
+      protocolVersion: 1,
+      message: encrypted.message,
+      files: []
+    })).buffer);
+    api.openFileRaw.mockResolvedValue(new TextEncoder().encode(JSON.stringify({
+      protocolVersion: 1,
+      file: encryptedFiles[0]
+    })).buffer);
+    const fixture = await renderApp(`/s/${id}#${encrypted.clientKey}`);
+    const recipient = fixture.debugElement.query(By.directive(RecipientPage)).injector.get(RecipientState);
+    await vi.waitFor(() => expect(recipient.metadataReady()).toBe(true));
+    expect(recipient.metadataFiles().map(file => file.name)).toEqual(['first.pdf', 'second.pdf']);
+
+    await recipient.open();
+
+    expect(recipient.openedMessage()).toBe('Message with files');
+    expect(recipient.metadataFiles().map(file => file.name)).toEqual(['first.pdf', 'second.pdf']);
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    await recipient.download(recipient.metadataFiles()[0]!);
+    anchorClick.mockRestore();
+    expect(api.openFileRaw).toHaveBeenCalledWith(id, encryptedFiles[0]!.id);
   });
 
   it('renders the security and not-found routes with matching titles and focus', async () => {
