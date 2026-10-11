@@ -295,6 +295,37 @@ describe('App', () => {
     expect(api.create).toHaveBeenCalledWith(expect.not.objectContaining({ clientKey: expect.any(String) }), expect.stringMatching(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[0-9]+\.[0-9]+\.[A-Za-z0-9_-]+\.[0-9]+$/));
   });
 
+  it('creates successfully when the local wall clock is five minutes ahead of the challenge issuer', async () => {
+    const actualNow = Date.now();
+    const serverExpiresAt = Math.floor(actualNow / 1000) + 300;
+    api.getCreateChallenge.mockResolvedValue({
+      version: 1,
+      challengeId: 'AAAAAAAAAAAAAAAAAAAAAA',
+      nonce: 'AAAAAAAAAAAAAAAAAAAAAA',
+      difficultyBits: 1,
+      expiresAt: serverExpiresAt,
+      signature: 'test-signature'
+    });
+    const wallClock = vi.spyOn(Date, 'now').mockReturnValue(actualNow + 5 * 60 * 1000);
+
+    try {
+      const fixture = await renderApp();
+      const message = (fixture.nativeElement as HTMLElement).querySelector<HTMLTextAreaElement>('#message');
+      message!.value = 'A private message';
+      message!.dispatchEvent(new Event('input'));
+      fixture.detectChanges();
+
+      (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('.compose-actions .primary')!.click();
+      await vi.waitFor(() => expect(api.create).toHaveBeenCalledTimes(1));
+      await fixture.whenStable();
+
+      expect(TestBed.inject(AppState).mode()).toBe('result');
+      expect(api.create.mock.calls[0]?.[1]?.split('.')[3]).toBe(String(serverExpiresAt));
+    } finally {
+      wallClock.mockRestore();
+    }
+  });
+
   it('keeps history cell labels available to the compact layout', async () => {
     const history = TestBed.inject(SecretHistoryStore);
     history.add({

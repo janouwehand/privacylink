@@ -16,6 +16,8 @@ type CreateChallenge = { version: number; challengeId: string; nonce: string; di
 
 const MAX_MESSAGE_CHARACTERS = 20000;
 const MAX_MESSAGE_BYTES = MAX_MESSAGE_CHARACTERS * 4;
+const CREATE_CHALLENGE_TTL_MS = 5 * 60 * 1000;
+const CREATE_CHALLENGE_SAFETY_MARGIN_MS = 5 * 1000;
 
 @Injectable({ providedIn: 'root' })
 export class CreateState {
@@ -27,7 +29,7 @@ export class CreateState {
   private readonly workProgress = inject(WorkProgressState);
   private readonly document = inject(DOCUMENT);
   private passwordCopiedTimeout: ReturnType<typeof setTimeout> | undefined;
-  private preparedProof: { header: string; expiresAt: number } | undefined;
+  private preparedProof: { header: string; monotonicDeadline: number } | undefined;
   private proofController: AbortController | undefined;
   private proofTask: Promise<void> | undefined;
   private proofTimer: ReturnType<typeof setTimeout> | undefined;
@@ -80,15 +82,19 @@ export class CreateState {
 
   private checkProofFreshness(): void {
     if (this.document.hidden || this.app.mode() !== 'create') return;
-    if (!this.preparedProof || this.preparedProof.expiresAt <= Date.now() / 1000 + 60) void this.prepareProof().catch(() => {});
+    if (!this.hasProofLifetime(60)) void this.prepareProof().catch(() => {});
     this.scheduleProofRefresh();
+  }
+
+  private hasProofLifetime(seconds: number): boolean {
+    return !!this.preparedProof && this.preparedProof.monotonicDeadline > performance.now() + seconds * 1000;
   }
 
   private scheduleProofRefresh(): void {
     if (this.proofTimer) clearTimeout(this.proofTimer);
     this.proofTimer = undefined;
     if (this.document.hidden || this.app.mode() !== 'create' || !this.preparedProof) return;
-    const delayMs = Math.max(0, (this.preparedProof.expiresAt - 60 - Date.now() / 1000) * 1000);
+    const delayMs = Math.max(0, this.preparedProof.monotonicDeadline - performance.now() - 60_000);
     this.proofTimer = setTimeout(() => {
       this.proofTimer = undefined;
       if (!this.document.hidden && this.app.mode() === 'create') void this.prepareProof().catch(() => {});
@@ -106,8 +112,7 @@ export class CreateState {
 
   private async prepareProof(force = false): Promise<void> {
     if (this.document.hidden || this.app.mode() !== 'create') return;
-    const now = Date.now() / 1000;
-    if (!force && this.preparedProof && this.preparedProof.expiresAt > now + 60) { this.scheduleProofRefresh(); return; }
+    if (!force && this.hasProofLifetime(60)) { this.scheduleProofRefresh(); return; }
     if (this.proofTask) {
       if (this.busy() && this.workProgress.active()) this.workProgress.setStage('preparing');
       return this.proofTask;
@@ -119,13 +124,18 @@ export class CreateState {
     let task!: Promise<void>;
     task = (async () => {
       try {
+        const challengeRequestStartedAt = performance.now();
         const challenge: CreateChallenge = await this.api.getCreateChallenge();
         if (controller.signal.aborted || this.document.hidden) return;
+        // The server issues challenges with a fixed five-minute TTL. Start the
+        // client deadline before the request so latency and second truncation are
+        // accounted for without relying on the local wall clock.
+        const monotonicDeadline = challengeRequestStartedAt + CREATE_CHALLENGE_TTL_MS - CREATE_CHALLENGE_SAFETY_MARGIN_MS;
         const counter = await getSecretCryptoWorkerClient().solveCreateProof(challenge, controller.signal);
         if (controller.signal.aborted || this.document.hidden) return;
         this.preparedProof = {
           header: `${challenge.challengeId}.${challenge.nonce}.${challenge.difficultyBits}.${challenge.expiresAt}.${challenge.signature}.${counter}`,
-          expiresAt: challenge.expiresAt
+          monotonicDeadline
         };
         this.proofFailureCount = 0;
         this.scheduleProofRefresh();
@@ -154,18 +164,18 @@ export class CreateState {
   }
 
   private async takeProof(): Promise<string> {
-    const now = Date.now() / 1000;
-    if (this.preparedProof && this.preparedProof.expiresAt > now + 5) {
-      const existing = this.preparedProof.header;
-      if (this.preparedProof.expiresAt <= now + 60) void this.prepareProof();
+    const existingProof = this.preparedProof;
+    if (existingProof && existingProof.monotonicDeadline > performance.now() + 5_000) {
+      const existing = existingProof.header;
+      if (existingProof.monotonicDeadline <= performance.now() + 60_000) void this.prepareProof();
       return existing;
     }
     if (this.preparedProof) this.preparedProof = undefined;
     if (!this.proofTask) void this.prepareProof(true);
     else if (this.busy() && this.workProgress.active()) this.workProgress.setStage('preparing');
     await this.proofTask;
-    const prepared = this.preparedProof as { header: string; expiresAt: number } | undefined;
-    if (!prepared || prepared.expiresAt <= Date.now() / 1000) throw new Error('Proof unavailable');
+    const prepared = this.preparedProof as { header: string; monotonicDeadline: number } | undefined;
+    if (!prepared || !this.hasProofLifetime(0)) throw new Error('Proof unavailable');
     return prepared.header;
   }
 
