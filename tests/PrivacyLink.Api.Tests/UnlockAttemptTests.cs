@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
-using PrivacyLink.Api;
+using PrivacyLink.Infrastructure;
+using PrivacyLink.Services;
 
 public sealed class UnlockAttemptTests
 {

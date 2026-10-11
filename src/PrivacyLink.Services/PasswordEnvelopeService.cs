@@ -2,21 +2,30 @@ using System.Security.Cryptography;
 using System.Text;
 using Konscious.Security.Cryptography;
 
-namespace PrivacyLink.Api;
+namespace PrivacyLink.Services;
 
-internal sealed record PasswordEnvelope(byte[] Salt, byte[] Nonce, byte[] Ciphertext);
+public sealed record PasswordEnvelope(byte[] Salt, byte[] Nonce, byte[] Ciphertext);
 
-internal sealed class PasswordEnvelopeService(IConfiguration configuration)
+public sealed record PasswordEnvelopeOptions(
+    string? Pepper,
+    int MemorySizeKb = 65536,
+    int Iterations = 3,
+    int DegreeOfParallelism = 2,
+    int MaxConcurrentOperations = 2,
+    int MaxQueuedUnlocks = 8,
+    int UnlockQueueTimeoutSeconds = 30);
+
+public sealed class PasswordEnvelopeService(PasswordEnvelopeOptions options)
 {
-    private readonly byte[]? _pepper = ReadPepper(configuration);
-    private readonly int _memorySizeKb = ReadBounded(configuration, "Security:Argon2:MemorySizeKb", 65536, 8192, 1024 * 1024);
-    private readonly int _iterations = ReadBounded(configuration, "Security:Argon2:Iterations", 3, 1, 20);
-    private readonly int _degreeOfParallelism = ReadBounded(configuration, "Security:Argon2:DegreeOfParallelism", 2, 1, 16);
-    // The service is a singleton, so this is a process-wide limit shared by protected create and unlock.
+    private readonly byte[]? _pepper = string.IsNullOrWhiteSpace(options.Pepper) ? null : Encoding.UTF8.GetBytes(options.Pepper);
+    private readonly int _memorySizeKb = Bounded(options.MemorySizeKb, 65536, 8192, 1024 * 1024);
+    private readonly int _iterations = Bounded(options.Iterations, 3, 1, 20);
+    private readonly int _degreeOfParallelism = Bounded(options.DegreeOfParallelism, 2, 1, 16);
+    // A singleton shares this process-wide limit across protected create and unlock operations.
     private readonly Argon2ConcurrencyGate _argon2Gate = new(
-        ReadBounded(configuration, "Security:Argon2:MaxConcurrentOperations", 2, 1, 8),
-        ReadBounded(configuration, "Security:Argon2:MaxQueuedUnlocks", 8, 0, 64),
-        TimeSpan.FromSeconds(ReadBounded(configuration, "Security:Argon2:UnlockQueueTimeoutSeconds", 30, 1, 120)));
+        Bounded(options.MaxConcurrentOperations, 2, 1, 8),
+        Bounded(options.MaxQueuedUnlocks, 8, 0, 64),
+        TimeSpan.FromSeconds(Bounded(options.UnlockQueueTimeoutSeconds, 30, 1, 120)));
 
     public async Task<PasswordEnvelope> EncryptAsync(string password, ReadOnlyMemory<byte> plaintext, CancellationToken cancellationToken = default)
     {
@@ -100,17 +109,10 @@ internal sealed class PasswordEnvelopeService(IConfiguration configuration)
         }
     }
 
-    private static byte[]? ReadPepper(IConfiguration configuration)
-    {
-        var value = SecretStoreConfiguration.ReadPasswordPepper(configuration, isProduction: false);
-        return string.IsNullOrWhiteSpace(value) ? null : Encoding.UTF8.GetBytes(value);
-    }
-
-    private static int ReadBounded(IConfiguration configuration, string key, int fallback, int minimum, int maximum) =>
-        int.TryParse(configuration[key], out var value) && value >= minimum && value <= maximum ? value : fallback;
+    private static int Bounded(int value, int fallback, int minimum, int maximum) => value >= minimum && value <= maximum ? value : fallback;
 }
 
-internal sealed class PasswordEnvelopeCapacityException : Exception { }
+public sealed class PasswordEnvelopeCapacityException : Exception { }
 
 internal sealed class Argon2ConcurrencyGate(int maxConcurrent, int maxQueuedUnlocks, TimeSpan unlockQueueTimeout)
 {
@@ -157,7 +159,7 @@ internal sealed class Argon2ConcurrencyGate(int maxConcurrent, int maxQueuedUnlo
     }
 }
 
-internal sealed class PasswordEnvelopeSession(byte[] salt, byte[] key) : IDisposable
+public sealed class PasswordEnvelopeSession(byte[] salt, byte[] key) : IDisposable
 {
     public PasswordEnvelope Encrypt(ReadOnlyMemory<byte> plaintext) => PasswordEnvelopeService.EncryptWithKey(key, salt, plaintext);
     public byte[] Decrypt(PasswordEnvelope envelope)

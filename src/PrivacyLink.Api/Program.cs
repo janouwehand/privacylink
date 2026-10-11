@@ -5,6 +5,8 @@ using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.HttpOverrides;
 using PrivacyLink.Api;
 using PrivacyLink.Contracts;
+using PrivacyLink.Infrastructure;
+using PrivacyLink.Services;
 using System.Threading.RateLimiting;
 
 if (args.Length == 1 && args[0] == "--healthcheck")
@@ -30,20 +32,16 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
         if (IPAddress.TryParse(value, out var address)) options.KnownProxies.Add(address);
 });
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<StorageHealth>();
-builder.Services.AddSingleton<PasswordEnvelopeService>();
-if (builder.Configuration.GetConnectionString("PrivacyLink") is not null)
-{
-    builder.Services.AddSingleton<ISecretRepository, PostgresSecretRepository>();
-    builder.Services.AddSingleton<IBlobStorage, FileBlobStorage>();
-}
-else
-{
-    builder.Services.AddSingleton<ISecretRepository, InMemorySecretRepository>();
-    builder.Services.AddSingleton<IBlobStorage, InMemoryBlobStorage>();
-}
-builder.Services.AddHostedService<StorageInitializer>();
-builder.Services.AddHostedService<ExpiredSecretCleanup>();
+builder.Services.AddSingleton(sp => new PasswordEnvelopeService(new PasswordEnvelopeOptions(
+    SecretStoreConfiguration.ReadPasswordPepper(builder.Configuration, isProduction: false),
+    BoundedLimit(builder.Configuration, "Security:Argon2:MemorySizeKb", 65536, 8192, 1024 * 1024),
+    BoundedLimit(builder.Configuration, "Security:Argon2:Iterations", 3, 1, 20),
+    BoundedLimit(builder.Configuration, "Security:Argon2:DegreeOfParallelism", 2, 1, 16),
+    BoundedLimit(builder.Configuration, "Security:Argon2:MaxConcurrentOperations", 2, 1, 8),
+    BoundedLimit(builder.Configuration, "Security:Argon2:MaxQueuedUnlocks", 8, 0, 64),
+    BoundedLimit(builder.Configuration, "Security:Argon2:UnlockQueueTimeoutSeconds", 30, 1, 120))));
+builder.Services.AddSingleton<SecretApplicationService>();
+builder.Services.AddPrivacyLinkInfrastructure(builder.Configuration);
 builder.Services.AddRateLimiter(options =>
 {
     var createPerHour = int.TryParse(builder.Configuration["RateLimiting:CreatePerIpPerHour"], out var hour) && hour > 0 ? hour : 20;
@@ -156,18 +154,18 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 
 app.MapGet("/health", () => new HealthResponse("ok"));
-app.MapGet("/health/ready", async (StorageHealth health, ISecretRepository repository, IBlobStorage blobs, HttpContext context) =>
-    await health.CheckReadinessAsync(repository, blobs, context.RequestAborted)
+app.MapGet("/health/ready", async (IStorageReadiness health, HttpContext context) =>
+    await health.CheckReadinessAsync(context.RequestAborted)
         ? Results.Ok(new HealthResponse("ready"))
         : Results.Json(new ErrorResponse("not_ready"), PrivacyLinkJsonContext.Default.ErrorResponse, statusCode: StatusCodes.Status503ServiceUnavailable));
 app.MapGet("/api/v1/capabilities", (IConfiguration configuration) => SecretEndpoints.Capabilities(configuration));
 app.MapGet("/api/v1/stats", () => Results.Json(new ErrorResponse("statistics_retired"), PrivacyLinkJsonContext.Default.ErrorResponse, statusCode: StatusCodes.Status410Gone));
-app.MapPost("/api/v1/secrets", (HttpRequest request, ISecretRepository repository, IBlobStorage blobs, PasswordEnvelopeService envelopes, TimeProvider clock, IConfiguration configuration) => SecretEndpoints.Create(request, repository, blobs, envelopes, clock, configuration)).RequireRateLimiting("create");
-app.MapGet("/api/v1/secrets/{id}", (string id, ISecretRepository repository, TimeProvider clock) => SecretEndpoints.Metadata(id, repository, clock));
-app.MapPost("/api/v1/secrets/{id}/revoke", (string id, HttpRequest request, ISecretRepository repository, IBlobStorage blobs) => SecretEndpoints.Revoke(id, request, repository, blobs)).RequireRateLimiting("revoke");
-app.MapPost("/api/v1/secrets/{id}/open", (string id, HttpRequest request, ISecretRepository repository, IBlobStorage blobs, TimeProvider clock) => SecretEndpoints.Open(id, request, repository, blobs, clock)).RequireRateLimiting("open");
-app.MapPost("/api/v1/secrets/{id}/unlock", (string id, HttpRequest request, ISecretRepository repository, IBlobStorage blobs, PasswordEnvelopeService envelopes, TimeProvider clock, IConfiguration configuration) => SecretEndpoints.Unlock(id, request, repository, blobs, envelopes, clock, configuration)).RequireRateLimiting("unlock");
-app.MapPost("/api/v1/secrets/{id}/files/{fileId}/open", (string id, string fileId, HttpRequest request, ISecretRepository repository, IBlobStorage blobs, TimeProvider clock) => SecretEndpoints.OpenFile(id, fileId, request, repository, blobs, clock)).RequireRateLimiting("open");
+app.MapPost("/api/v1/secrets", (HttpRequest request, SecretApplicationService service, IConfiguration configuration) => SecretEndpoints.Create(request, service, configuration)).RequireRateLimiting("create");
+app.MapGet("/api/v1/secrets/{id}", (string id, SecretApplicationService service, TimeProvider clock) => SecretEndpoints.Metadata(id, service, clock));
+app.MapPost("/api/v1/secrets/{id}/revoke", (string id, HttpRequest request, SecretApplicationService service) => SecretEndpoints.Revoke(id, request, service)).RequireRateLimiting("revoke");
+app.MapPost("/api/v1/secrets/{id}/open", (string id, HttpRequest request, SecretApplicationService service, TimeProvider clock) => SecretEndpoints.Open(id, request, service, clock)).RequireRateLimiting("open");
+app.MapPost("/api/v1/secrets/{id}/unlock", (string id, HttpRequest request, SecretApplicationService service, TimeProvider clock, IConfiguration configuration) => SecretEndpoints.Unlock(id, request, service, clock, configuration)).RequireRateLimiting("unlock");
+app.MapPost("/api/v1/secrets/{id}/files/{fileId}/open", (string id, string fileId, HttpRequest request, SecretApplicationService service, TimeProvider clock) => SecretEndpoints.OpenFile(id, fileId, request, service, clock)).RequireRateLimiting("open");
 app.MapFallbackToFile("index.html");
 
 app.Run();
@@ -181,6 +179,9 @@ static int PositiveLimit(IConfiguration configuration, int fallback, params stri
     return fallback;
 }
 
+static int BoundedLimit(IConfiguration configuration, string key, int fallback, int minimum, int maximum) =>
+    int.TryParse(configuration[key], out var value) && value >= minimum && value <= maximum ? value : fallback;
+
 [JsonSourceGenerationOptions(System.Text.Json.JsonSerializerDefaults.Web)]
 [JsonSerializable(typeof(HealthResponse))]
 [JsonSerializable(typeof(FileUploadPolicyResponse))]
@@ -189,8 +190,6 @@ static int PositiveLimit(IConfiguration configuration, int fallback, params stri
 [JsonSerializable(typeof(OpenSecretResponse))]
 [JsonSerializable(typeof(OpenFileResponse))]
 [JsonSerializable(typeof(OpenedFileResponse))]
-[JsonSerializable(typeof(List<StoredFile>))]
-[JsonSerializable(typeof(IReadOnlyList<StoredFile>))]
 [JsonSerializable(typeof(ErrorResponse))]
 [JsonSerializable(typeof(UnlockSecretRequest))]
 [JsonSerializable(typeof(CreateSecretRequest))]

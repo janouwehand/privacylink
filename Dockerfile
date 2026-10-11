@@ -15,6 +15,8 @@ WORKDIR /src
 
 COPY global.json PrivacyLink.slnx ./
 COPY src/PrivacyLink.Contracts/ src/PrivacyLink.Contracts/
+COPY src/PrivacyLink.Services/ src/PrivacyLink.Services/
+COPY src/PrivacyLink.Infrastructure/ src/PrivacyLink.Infrastructure/
 COPY src/PrivacyLink.Api/ src/PrivacyLink.Api/
 RUN dotnet restore src/PrivacyLink.Api/PrivacyLink.Api.csproj
 RUN dotnet publish src/PrivacyLink.Api/PrivacyLink.Api.csproj \
