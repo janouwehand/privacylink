@@ -23,7 +23,8 @@ type AdminAuditRecord = {
   fileId: string | null;
 };
 
-type AdminAuditPage = { items: AdminAuditRecord[]; nextBeforeId: number | null };
+type AdminAuditPage = { items: AdminAuditRecord[]; page: number; pageSize: number; totalCount: number };
+type AuditSort = 'time' | 'action' | 'secretId' | 'clientIp' | 'outcome' | 'httpStatus' | 'request';
 
 @Component({
   selector: 'app-admin-page',
@@ -40,7 +41,16 @@ export class AdminPage implements AfterViewInit {
   protected readonly loading = signal(false);
   protected readonly error = signal('');
   protected readonly records = signal<AdminAuditRecord[]>([]);
-  protected readonly nextBeforeId = signal<number | null>(null);
+  protected readonly page = signal(1);
+  protected readonly pageSize = signal(25);
+  protected readonly totalCount = signal(0);
+  protected readonly sortBy = signal<AuditSort>('time');
+  protected readonly sortDescending = signal(true);
+  protected readonly secretIdInput = signal('');
+  protected readonly clientIpInput = signal('');
+  protected readonly secretIdFilter = signal('');
+  protected readonly clientIpFilter = signal('');
+  private loadVersion = 0;
 
   constructor() {
     this.app.activatePage('admin');
@@ -68,7 +78,7 @@ export class AdminPage implements AfterViewInit {
         return;
       }
       this.authenticated.set(true);
-      await this.loadLatest();
+      await this.loadPage(1);
     } catch {
       this.error.set(this.language.t('adminLoginFailed'));
     } finally {
@@ -77,21 +87,50 @@ export class AdminPage implements AfterViewInit {
   }
 
   async logout(): Promise<void> {
+    this.loadVersion++;
+    this.loading.set(false);
     try {
       await fetch('/api/v1/admin/logout', { method: 'POST', cache: 'no-store', referrerPolicy: 'no-referrer' });
     } finally {
       this.authenticated.set(false);
       this.records.set([]);
-      this.nextBeforeId.set(null);
+      this.totalCount.set(0);
+      this.page.set(1);
     }
   }
 
-  async refresh(): Promise<void> { await this.loadLatest(); }
+  async refresh(): Promise<void> { await this.loadPage(this.page()); }
 
-  async loadOlder(): Promise<void> {
-    const beforeId = this.nextBeforeId();
-    if (beforeId === null || this.loading()) return;
-    await this.loadPage(beforeId, true);
+  async applyFilters(event: SubmitEvent): Promise<void> {
+    event.preventDefault();
+    this.secretIdFilter.set(this.secretIdInput().trim());
+    this.clientIpFilter.set(this.clientIpInput().trim());
+    await this.loadPage(1);
+  }
+
+  async setSort(column: AuditSort): Promise<void> {
+    if (this.sortBy() === column) this.sortDescending.set(!this.sortDescending());
+    else {
+      this.sortBy.set(column);
+      this.sortDescending.set(column === 'time');
+    }
+    await this.loadPage(1);
+  }
+
+  async setPageSize(event: Event): Promise<void> {
+    this.pageSize.set(Number((event.target as HTMLSelectElement).value));
+    await this.loadPage(1);
+  }
+
+  async previousPage(): Promise<void> { if (this.page() > 1) await this.loadPage(this.page() - 1); }
+  async nextPage(): Promise<void> { if (this.page() < this.pageCount()) await this.loadPage(this.page() + 1); }
+  protected pageCount(): number { return Math.max(1, Math.ceil(this.totalCount() / this.pageSize())); }
+  protected sortIndicator(column: AuditSort): string { return this.sortBy() === column ? (this.sortDescending() ? ' ▼' : ' ▲') : ''; }
+  protected sortAria(column: AuditSort): 'ascending' | 'descending' | 'none' {
+    return this.sortBy() === column ? (this.sortDescending() ? 'descending' : 'ascending') : 'none';
+  }
+  protected sortLabel(column: string): string {
+    return this.language.t('adminSortBy', { column, direction: this.sortDescending() ? this.language.t('adminDescending') : this.language.t('adminAscending') });
   }
 
   private async checkSession(): Promise<void> {
@@ -99,7 +138,7 @@ export class AdminPage implements AfterViewInit {
       const response = await fetch('/api/v1/admin/session', { cache: 'no-store', referrerPolicy: 'no-referrer' });
       if (response.ok) {
         this.authenticated.set(true);
-        await this.loadLatest();
+        await this.loadPage(1);
       }
     } catch {
       this.error.set(this.language.t('adminLoadFailed'));
@@ -108,31 +147,42 @@ export class AdminPage implements AfterViewInit {
     }
   }
 
-  private async loadLatest(): Promise<void> {
-    this.records.set([]);
-    this.nextBeforeId.set(null);
-    await this.loadPage(null, false);
-  }
-
-  private async loadPage(beforeId: number | null, append: boolean): Promise<void> {
+  private async loadPage(pageNumber: number): Promise<void> {
+    const version = ++this.loadVersion;
+    this.page.set(pageNumber);
     this.loading.set(true);
     this.error.set('');
     try {
-      const query = beforeId === null ? '' : `?beforeId=${encodeURIComponent(beforeId)}`;
-      const response = await fetch(`/api/v1/admin/audit${query}`, { cache: 'no-store', referrerPolicy: 'no-referrer' });
+      const params = new URLSearchParams({
+        page: String(pageNumber), pageSize: String(this.pageSize()), sortBy: this.sortBy(),
+        sortDirection: this.sortDescending() ? 'desc' : 'asc'
+      });
+      if (this.secretIdFilter()) params.set('secretId', this.secretIdFilter());
+      if (this.clientIpFilter()) params.set('clientIp', this.clientIpFilter());
+      const response = await fetch(`/api/v1/admin/audit?${params}`, { cache: 'no-store', referrerPolicy: 'no-referrer' });
       if (response.status === 401) {
+        if (version !== this.loadVersion) return;
         this.authenticated.set(false);
         this.records.set([]);
+        this.totalCount.set(0);
         return;
       }
+      if (response.status === 400 && this.clientIpFilter()) throw new Error('invalid-ip');
       if (!response.ok) throw new Error('Audit request failed.');
       const page = await response.json() as AdminAuditPage;
-      this.records.set(append ? [...this.records(), ...page.items] : page.items);
-      this.nextBeforeId.set(page.nextBeforeId);
-    } catch {
-      this.error.set(this.language.t('adminLoadFailed'));
+      if (version !== this.loadVersion) return;
+      const maxPage = Math.max(1, Math.ceil(page.totalCount / this.pageSize()));
+      if (pageNumber > maxPage) {
+        await this.loadPage(maxPage);
+        return;
+      }
+      this.records.set(page.items);
+      this.totalCount.set(page.totalCount);
+      this.page.set(pageNumber);
+    } catch (error) {
+      if (version === this.loadVersion) this.error.set(this.language.t(error instanceof Error && error.message === 'invalid-ip' ? 'adminInvalidIp' : 'adminLoadFailed'));
     } finally {
-      this.loading.set(false);
+      if (version === this.loadVersion) this.loading.set(false);
     }
   }
 }

@@ -187,6 +187,18 @@ const messagesNl = {
   adminLoading: 'Auditregels laden…',
   adminLoadFailed: 'Auditregels konden niet worden geladen.',
   adminEmpty: 'Er zijn nog geen auditregels.',
+  adminNoFilterResults: 'Geen auditregels gevonden met deze filters.',
+  adminInvalidIp: 'Vul een geldig IPv4- of IPv6-adres in.',
+  adminFilterSecretPlaceholder: 'Zoek op secret-ID',
+  adminFilterIpPlaceholder: 'Exact IP-adres',
+  adminApplyFilters: 'Filteren',
+  adminPageSize: 'Regels per pagina',
+  adminPageSummary: 'Pagina {page} van {pages} · {total} regels',
+  adminPrevious: 'Vorige',
+  adminNext: 'Volgende',
+  adminSortBy: 'Sorteren op {column}, {direction}',
+  adminAscending: 'oplopend',
+  adminDescending: 'aflopend',
   adminTime: 'Tijd',
   adminAction: 'Actie',
   adminSecret: 'Secret-ID',
@@ -212,6 +224,8 @@ type TranslationParameters = {
   filesTooLarge: { size: string };
   rateLimitedCountdown: { time: string };
   workFileNumber: { number: number };
+  adminPageSummary: { page: number; pages: number; total: number };
+  adminSortBy: { column: string; direction: string };
 };
 
 export type TranslationArguments<K extends TranslationKey> =
@@ -404,6 +418,18 @@ const messagesEn = {
   adminLoading: 'Loading audit records…',
   adminLoadFailed: 'Audit records could not be loaded.',
   adminEmpty: 'There are no audit records yet.',
+  adminNoFilterResults: 'No audit records matched these filters.',
+  adminInvalidIp: 'Enter a valid IPv4 or IPv6 address.',
+  adminFilterSecretPlaceholder: 'Search secret ID',
+  adminFilterIpPlaceholder: 'Exact IP address',
+  adminApplyFilters: 'Filter',
+  adminPageSize: 'Rows per page',
+  adminPageSummary: 'Page {page} of {pages} · {total} records',
+  adminPrevious: 'Previous',
+  adminNext: 'Next',
+  adminSortBy: 'Sort by {column}, {direction}',
+  adminAscending: 'ascending',
+  adminDescending: 'descending',
   adminTime: 'Time',
   adminAction: 'Action',
   adminSecret: 'Secret ID',
