@@ -29,6 +29,7 @@ public sealed record UnlockAttemptAdmission(bool SecretExists, bool Allowed, Dat
 
 public sealed record SecretRequestAuditStart(Guid RequestId, string TraceId, string SecretId, string SecretIdSource, string? RequestedSecretId, string Action, string HttpMethod, string RouteTemplate, DateTimeOffset StartedAt, System.Net.IPAddress? ClientIp, string? FileId);
 public sealed record SecretRequestAuditFinish(DateTimeOffset CompletedAt, long DurationMs, string State, string? Outcome, int? HttpStatus, string? ErrorCode);
+public sealed record SecretRequestAuditRecord(long Id, Guid RequestId, string TraceId, string SecretId, string SecretIdSource, string? RequestedSecretId, string Action, string HttpMethod, string RouteTemplate, DateTimeOffset StartedAt, DateTimeOffset? CompletedAt, long? DurationMs, string State, string? Outcome, int? HttpStatus, string? ErrorCode, System.Net.IPAddress? ClientIp, string? FileId);
 
 public sealed class SecretAuditUnavailableException : Exception
 {
@@ -39,6 +40,11 @@ public interface ISecretRequestAuditWriter
 {
     Task StartAsync(SecretRequestAuditStart audit, CancellationToken cancellationToken = default);
     Task FinishAsync(Guid requestId, SecretRequestAuditFinish finish, CancellationToken cancellationToken = default);
+}
+
+public interface ISecretRequestAuditReader
+{
+    Task<IReadOnlyList<SecretRequestAuditRecord>> ListAsync(long? beforeId, int pageSize, CancellationToken cancellationToken = default);
 }
 
 public sealed class UnlockAttemptLimitException(DateTimeOffset retryAt) : Exception

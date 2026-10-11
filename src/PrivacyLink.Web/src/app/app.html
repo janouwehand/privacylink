@@ -1,4 +1,4 @@
-<div class="shell variant-c" [class.history-mode]="app.mode() === 'history'" [class.security-mode]="app.mode() === 'security'" [class.generator-mode]="app.mode() === 'password-generator'">
+<div class="shell variant-c" [class.history-mode]="app.mode() === 'history'" [class.security-mode]="app.mode() === 'security'" [class.generator-mode]="app.mode() === 'password-generator'" [class.admin-mode]="app.mode() === 'admin'">
   <header class="topbar">
     <a class="brand" routerLink="/" [attr.aria-label]="language.t('brandHome')"><img class="brand-mark" src="/privacylink-mark.svg" alt=""> <span>PrivacyLink</span></a>
     <div class="header-tools">

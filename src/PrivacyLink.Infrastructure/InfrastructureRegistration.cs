@@ -12,7 +12,9 @@ public static class InfrastructureRegistration
         services.AddSingleton<IStorageReadiness>(sp => sp.GetRequiredService<StorageHealth>());
         if (configuration.GetConnectionString("PrivacyLink") is not null)
         {
-            services.AddSingleton<ISecretRequestAuditWriter, PostgresSecretRequestAuditWriter>();
+            services.AddSingleton<PostgresSecretRequestAuditWriter>();
+            services.AddSingleton<ISecretRequestAuditWriter>(sp => sp.GetRequiredService<PostgresSecretRequestAuditWriter>());
+            services.AddSingleton<ISecretRequestAuditReader>(sp => sp.GetRequiredService<PostgresSecretRequestAuditWriter>());
             services.AddSingleton<PostgresSecretRepository>();
             services.AddSingleton<ISecretRepository>(sp => sp.GetRequiredService<PostgresSecretRepository>());
             services.AddSingleton<IInfrastructureHealthCheck>(sp => sp.GetRequiredService<PostgresSecretRepository>());
@@ -24,7 +26,9 @@ public static class InfrastructureRegistration
         }
         else
         {
-            services.AddSingleton<ISecretRequestAuditWriter, InMemorySecretRequestAuditWriter>();
+            services.AddSingleton<InMemorySecretRequestAuditWriter>();
+            services.AddSingleton<ISecretRequestAuditWriter>(sp => sp.GetRequiredService<InMemorySecretRequestAuditWriter>());
+            services.AddSingleton<ISecretRequestAuditReader>(sp => sp.GetRequiredService<InMemorySecretRequestAuditWriter>());
             services.AddSingleton<InMemorySecretRepository>();
             services.AddSingleton<ISecretRepository>(sp => sp.GetRequiredService<InMemorySecretRepository>());
             services.AddSingleton<IInfrastructureHealthCheck>(sp => sp.GetRequiredService<InMemorySecretRepository>());

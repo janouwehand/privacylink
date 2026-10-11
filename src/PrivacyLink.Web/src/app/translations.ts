@@ -173,7 +173,30 @@ const messagesNl = {
   clearHistoryTitle: 'Geschiedenis wissen?',
   clearHistoryDescription: 'Alle links, PINs of wachtwoorden en intrekcodes worden uit deze browser verwijderd. De secrets blijven actief op de server tot ze verlopen. Trek secrets eerst apart in als je ze ook van de server wilt verwijderen.',
   statsTitle: 'PrivacyLink-statistieken',
-  statsUnavailable: 'Statistieken zijn tijdelijk niet beschikbaar.'
+  statsUnavailable: 'Statistieken zijn tijdelijk niet beschikbaar.',
+  pageTitleAdmin: 'Beheer · PrivacyLink',
+  adminTitle: 'Secret-auditlog',
+  adminIntro: 'Alle serveraanvragen over secrets, inclusief uitkomst en client-IP.',
+  adminPassword: 'Beheerderswachtwoord',
+  adminLogin: 'Aanmelden',
+  adminLoggingIn: 'Aanmelden…',
+  adminLoginFailed: 'Aanmelden mislukt. Controleer het wachtwoord of probeer het later opnieuw.',
+  adminSessionCheck: 'Beheerderssessie controleren…',
+  adminLogout: 'Afmelden',
+  adminRefresh: 'Vernieuwen',
+  adminLoading: 'Auditregels laden…',
+  adminLoadFailed: 'Auditregels konden niet worden geladen.',
+  adminEmpty: 'Er zijn nog geen auditregels.',
+  adminTime: 'Tijd',
+  adminAction: 'Actie',
+  adminSecret: 'Secret-ID',
+  adminClientIp: 'Client-IP',
+  adminOutcome: 'Uitkomst',
+  adminStatus: 'HTTP-status',
+  adminRequest: 'Aanvraag',
+  adminMore: 'Oudere regels laden',
+  adminNoIp: 'Onbekend',
+  adminRowDetails: 'Aanvraagdetails'
 } as const;
 
 export type TranslationKey = keyof typeof messagesNl;
@@ -367,7 +390,30 @@ const messagesEn = {
   clearHistoryTitle: 'Clear history?',
   clearHistoryDescription: 'All links, PINs or passwords, and revocation keys will be removed from this browser. The secrets remain active on the server until they expire. Revoke secrets individually first if you also want them deleted from the server.',
   statsTitle: 'PrivacyLink statistics',
-  statsUnavailable: 'Statistics are temporarily unavailable.'
+  statsUnavailable: 'Statistics are temporarily unavailable.',
+  pageTitleAdmin: 'Admin · PrivacyLink',
+  adminTitle: 'Secret request audit',
+  adminIntro: 'All server requests concerning secrets, including outcome and client IP.',
+  adminPassword: 'Administrator password',
+  adminLogin: 'Sign in',
+  adminLoggingIn: 'Signing in…',
+  adminLoginFailed: 'Sign-in failed. Check the password or try again later.',
+  adminSessionCheck: 'Checking administrator session…',
+  adminLogout: 'Sign out',
+  adminRefresh: 'Refresh',
+  adminLoading: 'Loading audit records…',
+  adminLoadFailed: 'Audit records could not be loaded.',
+  adminEmpty: 'There are no audit records yet.',
+  adminTime: 'Time',
+  adminAction: 'Action',
+  adminSecret: 'Secret ID',
+  adminClientIp: 'Client IP',
+  adminOutcome: 'Outcome',
+  adminStatus: 'HTTP status',
+  adminRequest: 'Request',
+  adminMore: 'Load older records',
+  adminNoIp: 'Unknown',
+  adminRowDetails: 'Request details'
 } satisfies Record<TranslationKey, string>;
 
 export const translations: Record<Language, Record<TranslationKey, string>> = {

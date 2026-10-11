@@ -6,6 +6,21 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; }
+.admin-login { max-width: 560px; }
+.admin-login .error { margin: 14px 0 0; }
+.admin-login .primary { margin-top: 20px; }
+.admin-actions { display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 18px; }
+.admin-audit-table { min-width: 900px; }
+.admin-audit-table td { overflow-wrap: anywhere; }
+.admin-audit-table code { font-size: 11px; }
+.admin-audit-table small { color: #666; }
+.admin-more { margin-top: 18px; }
+@media (max-width: 720px) {
+  .admin-actions { justify-content: stretch; }
+  .admin-actions button { flex: 1; }
+  .admin-audit-table { min-width: 0; }
+  .admin-audit-table td::before { content: attr(data-label); }
+}
 .shell { min-height: 100vh; display: flex; flex-direction: column; background: #fff; }
 .topbar { width: 100%; padding: 18px max(30px, calc((100% - 1220px) / 2)); border-bottom: 1px solid #ddd; display: flex; align-items: center; justify-content: space-between; }
 .brand { color: #16333A; text-decoration: none; font-family: Inter, "Segoe UI Variable", Aptos, ui-sans-serif, system-ui, sans-serif; font-weight: 650; font-size: 20px; letter-spacing: -.035em; display: flex; gap: 10px; align-items: center; }

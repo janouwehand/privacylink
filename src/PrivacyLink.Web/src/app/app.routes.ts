@@ -7,12 +7,14 @@ import { RecipientPage } from './recipient/recipient-page';
 import { SecurityPage } from './security/security-page';
 import { SecurityDetailsPage } from './security/security-details-page';
 import { StatisticsPage } from './statistics/statistics-page';
+import { AdminPage } from './admin/admin-page';
 
 export const routes: Routes = [
   { path: '', component: CreatePage },
   { path: 'history', component: HistoryPage },
   { path: 'security', component: SecurityPage },
   { path: 'stats', component: StatisticsPage },
+  { path: 'admin', component: AdminPage },
   { path: 'securitydetails', component: SecurityDetailsPage },
   { path: 'passwordgenerator', component: PasswordGeneratorPage },
   { path: 's/:id', component: RecipientPage },

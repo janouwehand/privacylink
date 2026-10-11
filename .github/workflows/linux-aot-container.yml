@@ -46,6 +46,7 @@ jobs:
       ASPNETCORE_ENVIRONMENT: Production
       POSTGRES_PASSWORD: privacylink-ci-temporary-postgres-password
       PRIVACYLINK_PASSWORD_PEPPER: privacylink-ci-temporary-password-pepper
+      PRIVACYLINK_ADMIN_PASSWORD: privacylink-ci-temporary-admin-password-only-for-ci
       PRIVACYLINK_ALLOWED_HOSTS: localhost;127.0.0.1;privacylinkslim
       PRIVACYLINK_HTTP_PORT: "18080"
     steps:

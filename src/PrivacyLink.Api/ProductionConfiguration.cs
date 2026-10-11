@@ -9,6 +9,10 @@ internal static class ProductionConfiguration
         var requirePepper = !bool.TryParse(configuration["Security:RequirePasswordPepper"], out var configuredRequirePepper) || configuredRequirePepper;
         if (!isProduction) return;
 
+        var adminPassword = configuration["Security:AdminPassword"];
+        if (string.IsNullOrWhiteSpace(adminPassword) || adminPassword.Length < 16)
+            throw new InvalidOperationException("Security:AdminPassword must be supplied as a secret of at least 16 characters in production.");
+
         if (requirePepper) SecretStoreConfiguration.ReadPasswordPepper(configuration, isProduction: true);
         else if (!string.IsNullOrWhiteSpace(configuration["Security:SecretStore:Provider"]))
             SecretStoreConfiguration.ReadPasswordPepper(configuration, isProduction: true);
