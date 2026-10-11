@@ -64,16 +64,16 @@ export class CreateState {
 
   fileLimitHint(): string {
     const policy = this.filePolicy();
-    const maxFiles = policy?.maxFiles ?? 10;
-    const maxTotal = this.language.formatFileSize(policy?.maxTotalFileBytes ?? 25 * 1024 * 1024);
+    const maxFiles = policy?.maxFiles ?? 15;
+    const maxTotal = this.language.formatFileSize(policy?.maxTotalFileBytes ?? 75 * 1024 * 1024);
     return this.language.t('fileLimitHint', { maxFiles, maxTotal });
   }
 
-  fileCountLimit(): number { return this.filePolicy()?.maxFiles ?? 10; }
+  fileCountLimit(): number { return this.filePolicy()?.maxFiles ?? 15; }
 
   fileUsageSummary(): string {
     const totalBytes = this.selectedFiles().reduce((total, file) => total + file.size, 0);
-    const maxBytes = this.filePolicy()?.maxTotalFileBytes ?? 25 * 1024 * 1024;
+    const maxBytes = this.filePolicy()?.maxTotalFileBytes ?? 75 * 1024 * 1024;
     return this.language.t('fileUsageSummary', {
       selected: this.selectedFiles().length,
       maxFiles: this.fileCountLimit(),
@@ -153,7 +153,7 @@ export class CreateState {
       knownFiles.add(identity);
       return true;
     });
-    const maxFiles = policy?.maxFiles ?? 10;
+    const maxFiles = policy?.maxFiles ?? 15;
     const available = Math.max(0, maxFiles - current.length);
     const overCount = unique.slice(available);
     const candidates = unique.slice(0, available);

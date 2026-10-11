@@ -15,7 +15,7 @@ import { encryptMessage } from './secret-crypto';
 
 function createSecretApiStub() {
   return {
-    getFileUploadPolicy: vi.fn().mockResolvedValue({ maxFiles: 10, maxTotalFileBytes: 25 * 1024 * 1024, allowedFileExtensions: ['.txt'] }),
+    getFileUploadPolicy: vi.fn().mockResolvedValue({ maxFiles: 15, maxTotalFileBytes: 75 * 1024 * 1024, allowedFileExtensions: ['.txt'] }),
     create: vi.fn().mockResolvedValue({ id: 'AAAAAAAAAAAAAAAAAAAAAA', expiresAt: '2030-01-01T00:00:00.000Z', passwordProtected: false, revokeToken: 'test-revoke-token' }),
     revoke: vi.fn().mockResolvedValue(undefined),
     getMetadata: vi.fn().mockResolvedValue({ exists: true, protocolVersion: 1, expiresAt: '2030-01-01T00:00:00.000Z', passwordProtected: false, hasMessage: true, fileCount: 0, files: [] }),
@@ -88,15 +88,15 @@ describe('App', () => {
     const fixture = await renderApp();
     const create = TestBed.inject(CreateState);
     const language = TestBed.inject(LanguageState);
-    create.setError({ key: 'tooManyFiles', params: { max: 10 } });
+    create.setError({ key: 'tooManyFiles', params: { max: 15 } });
     fixture.detectChanges();
 
     const compiled = fixture.nativeElement as HTMLElement;
-    expect(compiled.querySelector('.error')?.textContent).toContain('You can add at most 10 files.');
+    expect(compiled.querySelector('.error')?.textContent).toContain('You can add at most 15 files.');
 
     language.setLanguage('nl');
     fixture.detectChanges();
-    expect(compiled.querySelector('.error')?.textContent).toContain('Je kunt maximaal 10 bestanden toevoegen.');
+    expect(compiled.querySelector('.error')?.textContent).toContain('Je kunt maximaal 15 bestanden toevoegen.');
   });
 
   it('waits for an explicit unlock action and renders decrypted content as text', async () => {

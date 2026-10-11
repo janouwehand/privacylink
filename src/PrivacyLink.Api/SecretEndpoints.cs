@@ -12,8 +12,8 @@ internal static class SecretEndpoints
 
     public static IResult Capabilities(IConfiguration configuration)
     {
-        var maxFiles = Limit(configuration, "Limits:MaxFiles", 10);
-        var maxFileBytes = LimitLong(configuration, "Limits:MaxTotalPlaintextFileBytes", 25 * 1024 * 1024);
+        var maxFiles = Limit(configuration, "Limits:MaxFiles", 15);
+        var maxFileBytes = LimitLong(configuration, "Limits:MaxTotalPlaintextFileBytes", 75 * 1024 * 1024);
         return Results.Json(new FileUploadPolicyResponse(maxFiles, maxFileBytes, AllowedExtensions(configuration).OrderBy(extension => extension, StringComparer.Ordinal).ToArray()), PrivacyLinkJsonContext.Default.FileUploadPolicyResponse);
     }
 
@@ -21,9 +21,9 @@ internal static class SecretEndpoints
     {
         var cancellationToken = request.HttpContext.RequestAborted;
         var maxMessage = Limit(configuration, "Limits:MaxMessagePlaintextBytes", 80000);
-        var maxFiles = Limit(configuration, "Limits:MaxFiles", 10);
-        var maxFileBytes = LimitLong(configuration, "Limits:MaxTotalPlaintextFileBytes", 25 * 1024 * 1024);
-        var maxRequestBytes = Limit(configuration, "Limits:MaxRequestBytes", 36 * 1024 * 1024);
+        var maxFiles = Limit(configuration, "Limits:MaxFiles", 15);
+        var maxFileBytes = LimitLong(configuration, "Limits:MaxTotalPlaintextFileBytes", 75 * 1024 * 1024);
+        var maxRequestBytes = Limit(configuration, "Limits:MaxRequestBytes", 110 * 1024 * 1024);
         var allowedExtensions = AllowedExtensions(configuration);
         if (!request.HasJsonContentType()) return Error(415, "unsupported_media_type");
         if (request.ContentLength > maxRequestBytes) return Error(413, "payload_too_large");
@@ -209,7 +209,7 @@ internal static class SecretEndpoints
     {
         result = null;
         if (!value.TryGetProperty("nonce", out var nonce) || !value.TryGetProperty("ciphertext", out var ciphertext) || nonce.ValueKind != JsonValueKind.String || ciphertext.ValueKind != JsonValueKind.String) return false;
-        if (!TryDecodeCanonical(nonce.GetString()!, 12, 12, out _) || !TryDecodeCanonical(ciphertext.GetString()!, 17, 36 * 1024 * 1024, out var bytes)) return false;
+        if (!TryDecodeCanonical(nonce.GetString()!, 12, 12, out _) || !TryDecodeCanonical(ciphertext.GetString()!, 17, 76 * 1024 * 1024, out var bytes)) return false;
         result = new MessageInput(nonce.GetString()!, bytes);
         return true;
     }

@@ -4,7 +4,7 @@ A local PrivacyLink prototype for sharing text and files without accounts throug
 
 Messages are encrypted in the browser using AES-256-GCM and an HKDF-derived key. The client key stays in the link fragment (`#...`) and is never sent to the API. Recipients open a message through an explicit action. Links can be opened repeatedly until they expire.
 
-**Storage:** without database configuration, development mode uses temporary in-memory storage. With `ConnectionStrings:PrivacyLink` configured, the API uses PostgreSQL for metadata and the existing blob abstraction for ciphertext on the local filesystem (`Storage:BlobPath`). A message can contain optional text and up to 10 encrypted files (25 MiB total). PIN and password protection add a server-side encryption envelope whose key is derived with Argon2id.
+**Storage:** without database configuration, development mode uses temporary in-memory storage. With `ConnectionStrings:PrivacyLink` configured, the API uses PostgreSQL for metadata and the existing blob abstraction for ciphertext on the local filesystem (`Storage:BlobPath`). A message can contain optional text and up to 15 encrypted files (75 MiB total). PIN and password protection add a server-side encryption envelope whose key is derived with Argon2id.
 
 ## Requirements
 
