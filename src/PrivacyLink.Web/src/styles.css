@@ -10,14 +10,27 @@ body { margin: 0; min-width: 320px; }
 .admin-login .error { margin: 14px 0 0; }
 .admin-login .primary { margin-top: 20px; }
 .admin-actions { display: flex; justify-content: flex-end; gap: 10px; margin-bottom: 18px; }
+.admin-filters { display: flex; align-items: end; gap: 12px; margin: 0 0 18px; }
+.admin-filters label, .admin-pagination label { display: grid; flex: 1; gap: 6px; color: #444; font-size: 12px; font-weight: 650; }
+.admin-filters input { padding: 9px 11px !important; }
+.admin-sort { border: 0; background: transparent; color: inherit; font: inherit; font-weight: 700; padding: 0; cursor: pointer; }
+.admin-pagination { display: flex; align-items: end; justify-content: flex-end; gap: 12px; margin-top: 18px; }
+.admin-pagination label { flex: 0 0 140px; }
+.admin-pagination select { padding: 8px 10px !important; }
+.admin-pagination span { margin: 0 auto 10px 0; color: #555; font-size: 12px; }
 .admin-audit-table { min-width: 900px; }
 .admin-audit-table td { overflow-wrap: anywhere; }
 .admin-audit-table code { font-size: 11px; }
 .admin-audit-table small { color: #666; }
-.admin-more { margin-top: 18px; }
 @media (max-width: 720px) {
   .admin-actions { justify-content: stretch; }
   .admin-actions button { flex: 1; }
+  .admin-filters { align-items: stretch; flex-direction: column; }
+  .admin-filters button { width: 100%; }
+  .admin-pagination { align-items: stretch; flex-wrap: wrap; }
+  .admin-pagination label { flex: 1 1 100%; }
+  .admin-pagination span { flex: 1 1 100%; margin: 0; }
+  .admin-pagination button { flex: 1; }
   .admin-audit-table { min-width: 0; }
   .admin-audit-table td::before { content: attr(data-label); }
 }

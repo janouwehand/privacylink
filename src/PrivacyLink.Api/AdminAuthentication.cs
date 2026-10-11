@@ -29,7 +29,7 @@ internal sealed record AdminSessionResponse(bool Authenticated);
 internal sealed record AdminAuditRecordResponse(long Id, string TraceId, string SecretId, string SecretIdSource, string? RequestedSecretId,
     string Action, string HttpMethod, string RouteTemplate, DateTimeOffset StartedAt, DateTimeOffset? CompletedAt, long? DurationMs,
     string State, string? Outcome, int? HttpStatus, string? ErrorCode, string? ClientIp, string? FileId);
-internal sealed record AdminAuditPageResponse(IReadOnlyList<AdminAuditRecordResponse> Items, long? NextBeforeId);
+internal sealed record AdminAuditPageResponse(IReadOnlyList<AdminAuditRecordResponse> Items, int Page, int PageSize, long TotalCount);
 
 internal static class AdminEndpoints
 {
@@ -65,16 +65,27 @@ internal static class AdminEndpoints
         return Results.NoContent();
     }
 
-    public static async Task<IResult> Audit(long? beforeId, ISecretRequestAuditReader reader, CancellationToken cancellationToken)
+    public static async Task<IResult> Audit(int? page, int? pageSize, string? sortBy, string? sortDirection, string? secretId, string? clientIp,
+        ISecretRequestAuditReader reader, CancellationToken cancellationToken)
     {
-        const int pageSize = 50;
-        var records = await reader.ListAsync(beforeId, pageSize + 1, cancellationToken);
-        var hasMore = records.Count > pageSize;
-        var visible = records.Take(pageSize).ToArray();
-        var items = visible.Select(record => new AdminAuditRecordResponse(record.Id, record.TraceId, record.SecretId, record.SecretIdSource,
+        var requestedPage = page ?? 1;
+        var requestedPageSize = pageSize ?? 50;
+        var requestedSort = sortBy ?? "time";
+        var descending = sortDirection?.Equals("asc", StringComparison.OrdinalIgnoreCase) != true;
+        if (requestedPage is < 1 or > 10_000_000 || requestedPageSize is < 1 or > 100 || requestedSort is not ("time" or "action" or "secretId" or "clientIp" or "outcome" or "httpStatus" or "request") ||
+            (sortDirection is not null && !sortDirection.Equals("asc", StringComparison.OrdinalIgnoreCase) && !sortDirection.Equals("desc", StringComparison.OrdinalIgnoreCase)))
+            return Results.BadRequest();
+        string? normalizedClientIp = null;
+        if (!string.IsNullOrWhiteSpace(clientIp))
+        {
+            if (!System.Net.IPAddress.TryParse(clientIp.Trim(), out var parsedIp)) return Results.BadRequest();
+            normalizedClientIp = (parsedIp.IsIPv4MappedToIPv6 ? parsedIp.MapToIPv4() : parsedIp).ToString();
+        }
+        var records = await reader.ListAsync(new SecretRequestAuditQuery(requestedPage, requestedPageSize, requestedSort, descending,
+            string.IsNullOrWhiteSpace(secretId) ? null : secretId.Trim(), normalizedClientIp), cancellationToken);
+        var items = records.Items.Select(record => new AdminAuditRecordResponse(record.Id, record.TraceId, record.SecretId, record.SecretIdSource,
             record.RequestedSecretId, record.Action, record.HttpMethod, record.RouteTemplate, record.StartedAt, record.CompletedAt,
             record.DurationMs, record.State, record.Outcome, record.HttpStatus, record.ErrorCode, record.ClientIp?.ToString(), record.FileId)).ToArray();
-        long? nextBeforeId = hasMore && visible.Length > 0 ? visible[^1].Id : null;
-        return Results.Json(new AdminAuditPageResponse(items, nextBeforeId), PrivacyLinkJsonContext.Default.AdminAuditPageResponse);
+        return Results.Json(new AdminAuditPageResponse(items, requestedPage, requestedPageSize, records.TotalCount), PrivacyLinkJsonContext.Default.AdminAuditPageResponse);
     }
 }
