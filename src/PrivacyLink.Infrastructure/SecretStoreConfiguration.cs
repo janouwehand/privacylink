@@ -22,6 +22,10 @@ public static class SecretStoreConfiguration
         if (!string.IsNullOrWhiteSpace(adminPasswordPath))
             settings["Security:AdminPassword"] = ReadSecretFile(adminPasswordPath);
 
+        var createProofKeyPath = configuration["Security:CreateProofHmacKey_FILE"];
+        if (!string.IsNullOrWhiteSpace(createProofKeyPath))
+            settings["Security:CreateProofHmacKey"] = ReadSecretFile(createProofKeyPath);
+
         var databasePasswordPath = configuration["ConnectionStrings:PrivacyLinkPassword_FILE"];
         if (!string.IsNullOrWhiteSpace(databasePasswordPath))
         {

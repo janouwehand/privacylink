@@ -3,7 +3,7 @@ import { DOCUMENT } from '@angular/common';
 import { AppState } from '../app-state';
 import { LinkSharingState } from '../link-sharing-state';
 import { LanguageState } from '../language-state';
-import { SecretApi } from '../secret-api';
+import { SecretApi, SecretApiError } from '../secret-api';
 import { decodeCanonical, derivePasswordToken, encryptMessage } from '../secret-crypto';
 import { SecretHistoryStore } from '../secret-history-store';
 import { WorkProgressState } from '../work-progress-state';
@@ -12,6 +12,7 @@ import type { TranslatableError } from '../translations';
 
 type Expiry = '1d' | '7d' | '14d';
 type FilePolicy = { maxFiles: number; maxTotalFileBytes: number; allowedFileExtensions: string[] };
+type CreateChallenge = { version: number; challengeId: string; nonce: string; difficultyBits: number; expiresAt: number; signature: string };
 
 const MAX_MESSAGE_CHARACTERS = 20000;
 const MAX_MESSAGE_BYTES = MAX_MESSAGE_CHARACTERS * 4;
@@ -26,6 +27,12 @@ export class CreateState {
   private readonly workProgress = inject(WorkProgressState);
   private readonly document = inject(DOCUMENT);
   private passwordCopiedTimeout: ReturnType<typeof setTimeout> | undefined;
+  private preparedProof: { header: string; expiresAt: number } | undefined;
+  private proofController: AbortController | undefined;
+  private proofTask: Promise<void> | undefined;
+  private proofTimer: ReturnType<typeof setTimeout> | undefined;
+  private proofFailureCount = 0;
+  private visibilityListenerRegistered = false;
 
   readonly message = signal('');
   readonly password = signal('');
@@ -42,6 +49,7 @@ export class CreateState {
   readonly isDragging = signal(false);
   readonly expiry = signal<Expiry>('7d');
   readonly busy = signal(false);
+  readonly proofCalculating = signal(false);
   readonly shareLink = signal('');
   readonly expiresAt = signal('');
   readonly copied = signal(false);
@@ -55,10 +63,136 @@ export class CreateState {
 
   initialize(): void {
     this.clearError();
-    if (this.filePolicy()) return;
-    void this.api.getFileUploadPolicy().then(policy => this.filePolicy.set(policy)).catch(() => {
+    if (!this.filePolicy()) void this.api.getFileUploadPolicy().then(policy => this.filePolicy.set(policy)).catch(() => {
       /* Backend validation remains authoritative if policy loading fails. */
     });
+    if (!this.visibilityListenerRegistered) {
+      this.document.addEventListener('visibilitychange', this.handleVisibilityChange);
+      this.visibilityListenerRegistered = true;
+    }
+    if (!this.document.hidden) void this.prepareProof().catch(() => {});
+  }
+
+  private readonly handleVisibilityChange = (): void => {
+    if (this.document.hidden) this.cancelProofCalculation();
+    else this.checkProofFreshness();
+  };
+
+  private checkProofFreshness(): void {
+    if (this.document.hidden || this.app.mode() !== 'create') return;
+    if (!this.preparedProof || this.preparedProof.expiresAt <= Date.now() / 1000 + 60) void this.prepareProof().catch(() => {});
+    this.scheduleProofRefresh();
+  }
+
+  private scheduleProofRefresh(): void {
+    if (this.proofTimer) clearTimeout(this.proofTimer);
+    this.proofTimer = undefined;
+    if (this.document.hidden || this.app.mode() !== 'create' || !this.preparedProof) return;
+    const delayMs = Math.max(0, (this.preparedProof.expiresAt - 60 - Date.now() / 1000) * 1000);
+    this.proofTimer = setTimeout(() => {
+      this.proofTimer = undefined;
+      if (!this.document.hidden && this.app.mode() === 'create') void this.prepareProof().catch(() => {});
+    }, delayMs);
+  }
+
+  private cancelProofCalculation(): void {
+    this.proofController?.abort();
+    this.proofController = undefined;
+    this.proofTask = undefined;
+    this.proofCalculating.set(false);
+    if (this.proofTimer) clearTimeout(this.proofTimer);
+    this.proofTimer = undefined;
+  }
+
+  private async prepareProof(force = false): Promise<void> {
+    if (this.document.hidden || this.app.mode() !== 'create') return;
+    const now = Date.now() / 1000;
+    if (!force && this.preparedProof && this.preparedProof.expiresAt > now + 60) { this.scheduleProofRefresh(); return; }
+    if (this.proofTask) {
+      if (this.busy() && this.workProgress.active()) this.workProgress.setStage('preparing');
+      return this.proofTask;
+    }
+    const controller = new AbortController();
+    this.proofController = controller;
+    this.proofCalculating.set(true);
+    if (this.busy() && this.workProgress.active()) this.workProgress.setStage('preparing');
+    let task!: Promise<void>;
+    task = (async () => {
+      try {
+        const challenge: CreateChallenge = await this.api.getCreateChallenge();
+        if (controller.signal.aborted || this.document.hidden) return;
+        const counter = await getSecretCryptoWorkerClient().solveCreateProof(challenge, controller.signal);
+        if (controller.signal.aborted || this.document.hidden) return;
+        this.preparedProof = {
+          header: `${challenge.challengeId}.${challenge.nonce}.${challenge.difficultyBits}.${challenge.expiresAt}.${challenge.signature}.${counter}`,
+          expiresAt: challenge.expiresAt
+        };
+        this.proofFailureCount = 0;
+        this.scheduleProofRefresh();
+      } catch (error) {
+        this.proofFailureCount++;
+        throw error;
+      } finally {
+        const isCurrentCalculation = this.proofController === controller;
+        if (isCurrentCalculation) this.proofController = undefined;
+        if (this.proofTask === task) this.proofTask = undefined;
+        if (isCurrentCalculation) this.proofCalculating.set(false);
+        if (this.busy() && this.workProgress.active()) this.workProgress.setStage('processing');
+        if (this.proofFailureCount > 0 && this.preparedProof && !this.document.hidden && this.app.mode() === 'create') this.scheduleProofRetry();
+      }
+    })();
+    this.proofTask = task;
+    return task;
+  }
+
+  private scheduleProofRetry(): void {
+    if (this.proofTimer) clearTimeout(this.proofTimer);
+    this.proofTimer = setTimeout(() => {
+      this.proofTimer = undefined;
+      if (!this.document.hidden && this.app.mode() === 'create') void this.prepareProof().catch(() => {});
+    }, Math.min(60, this.proofFailureCount * 15) * 1000);
+  }
+
+  private async takeProof(): Promise<string> {
+    const now = Date.now() / 1000;
+    if (this.preparedProof && this.preparedProof.expiresAt > now + 5) {
+      const existing = this.preparedProof.header;
+      if (this.preparedProof.expiresAt <= now + 60) void this.prepareProof();
+      return existing;
+    }
+    if (this.preparedProof) this.preparedProof = undefined;
+    if (!this.proofTask) void this.prepareProof(true);
+    else if (this.busy() && this.workProgress.active()) this.workProgress.setStage('preparing');
+    await this.proofTask;
+    const prepared = this.preparedProof as { header: string; expiresAt: number } | undefined;
+    if (!prepared || prepared.expiresAt <= Date.now() / 1000) throw new Error('Proof unavailable');
+    return prepared.header;
+  }
+
+  private async submitWithProof<T>(send: (proof: string) => Promise<T>): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      const proof = await this.takeProof();
+      if (this.preparedProof?.header === proof) this.preparedProof = undefined;
+      try {
+        return await send(proof);
+      } catch (error) {
+        if (!(error instanceof SecretApiError) || error.status !== 403 || error.code !== 'proof_required' || attempt > 0) throw error;
+        await this.prepareProof(true);
+      }
+    }
+  }
+
+  private stopProof(): void {
+    this.cancelProofCalculation();
+    this.preparedProof = undefined;
+  }
+
+  onPageExit(): void {
+    this.stopProof();
+    if (this.visibilityListenerRegistered) {
+      this.document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+      this.visibilityListenerRegistered = false;
+    }
   }
 
   setError(error: TranslatableError): void { this.error.set([error]); }
@@ -216,7 +350,7 @@ export class CreateState {
       } as const;
       const created = filesToEncrypt.length
         ? await this.createFilesWithWorker(requestWithoutFiles, filesToEncrypt, clientKey)
-        : await this.api.create({ ...requestWithoutFiles, files: [] });
+        : await this.submitWithProof(proof => this.api.create({ ...requestWithoutFiles, files: [] }, proof));
       decodeCanonical(created.id, 16);
       this.shareLink.set(`${this.document.location.origin}/s/${created.id}#${encrypted.clientKey}`);
       this.expiresAt.set(created.expiresAt);
@@ -235,11 +369,13 @@ export class CreateState {
       this.passwordVisible.set(false);
       this.passwordCopied.set(false);
       this.passwordCopyAcknowledged.set(false);
+      this.stopProof();
     } catch {
       this.setError({ key: 'failure' });
     } finally {
       this.busy.set(false);
       this.workProgress.finish();
+      if (this.app.mode() === 'create' && !this.document.hidden) void this.prepareProof().catch(() => {});
     }
   }
 
@@ -258,7 +394,7 @@ export class CreateState {
     });
     files.forEach((_, index) => this.workProgress.setFileStatus(index, 'done'));
     this.workProgress.setStage('uploading');
-    return this.api.createSerialized(body);
+    return this.submitWithProof(proof => this.api.createSerialized(body, proof));
   }
 
   async copy(): Promise<void> {

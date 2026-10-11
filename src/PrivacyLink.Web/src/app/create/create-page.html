@@ -38,6 +38,6 @@
       </div>
     </div>
     @if (create.error().length) { <p class="error" role="alert">{{ create.errorText() }}</p> }
-    <div class="compose-actions"><button class="primary" type="button" (click)="create.create()" [disabled]="create.busy()">{{ create.busy() ? language.t('creating') : language.t('create') }}</button></div>
+    <div class="compose-actions"><button class="primary" type="button" (click)="create.create()" [disabled]="create.busy()">{{ create.busy() ? language.t('creating') : language.t('create') }}</button>@if (create.proofCalculating() && !create.busy()) { <span class="field-note" role="status" aria-live="polite">{{ language.t('workPreparing') }}</span> }</div>
   </section>
 }

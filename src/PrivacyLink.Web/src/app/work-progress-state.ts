@@ -1,7 +1,7 @@
 import { Injectable, signal } from '@angular/core';
 
 export type WorkKind = 'create' | 'open' | 'download';
-export type WorkStage = 'processing' | 'uploading' | 'fetching';
+export type WorkStage = 'processing' | 'uploading' | 'fetching' | 'preparing';
 export type WorkFileStatus = 'pending' | 'processing' | 'done';
 
 export interface WorkFile {

@@ -5,6 +5,18 @@ namespace PrivacyLink.Api;
 
 internal static class SecurityKeyUtilities
 {
+    internal static byte[] RequireExactKey(string? text, string name, int length)
+    {
+        if (string.IsNullOrWhiteSpace(text)) throw new InvalidOperationException($"{name} must be configured as a Base64 secret.");
+        try
+        {
+            var bytes = Convert.FromBase64String(text);
+            if (bytes.Length == length) return bytes;
+        }
+        catch (FormatException) { }
+        throw new InvalidOperationException($"{name} must be a Base64 secret of exactly {length} bytes.");
+    }
+
     internal static string? Normalize(IPAddress? address)
     {
         if (address is null) return null;

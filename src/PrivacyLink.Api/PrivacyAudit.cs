@@ -13,6 +13,7 @@ internal static class PrivacyAudit
     internal const string ErrorCodeItem = "PrivacyLink.SecretRequestErrorCode";
 
     public static bool IsAudited(HttpRequest request) =>
+        !(HttpMethods.IsGet(request.Method) && request.Path.Equals("/api/v1/secrets/create-challenge", StringComparison.OrdinalIgnoreCase)) &&
         request.Path.StartsWithSegments("/api/v1/secrets") &&
         (HttpMethods.IsPost(request.Method) || HttpMethods.IsGet(request.Method));
 
@@ -26,7 +27,7 @@ internal static class PrivacyAudit
         return "create";
     }
 
-    public static string ClientAddress(HttpContext context) => context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    public static string ClientAddress(HttpContext context) => SecurityKeyUtilities.Normalize(context.Connection.RemoteIpAddress) ?? "unknown";
 
     public static string NewSecretId() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(16)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 

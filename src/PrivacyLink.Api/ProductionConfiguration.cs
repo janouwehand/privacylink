@@ -6,6 +6,9 @@ internal static class ProductionConfiguration
 {
     public static void Validate(IConfiguration configuration, bool isProduction)
     {
+        SecurityKeyUtilities.RequireExactKey(configuration["Security:CreateProofHmacKey"], "Security:CreateProofHmacKey", 32);
+        if (!int.TryParse(configuration["Security:CreateProofDifficultyBits"], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var proofDifficulty) || proofDifficulty is < 1 or > 24)
+            throw new InvalidOperationException("Security:CreateProofDifficultyBits must be an integer from 1 through 24.");
         var requirePepper = !bool.TryParse(configuration["Security:RequirePasswordPepper"], out var configuredRequirePepper) || configuredRequirePepper;
         if (!isProduction) return;
 

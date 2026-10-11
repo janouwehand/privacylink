@@ -21,7 +21,7 @@
     <div class="work-progress-indicator" aria-hidden="true"></div>
     <div class="work-progress-content">
       <h2 id="work-progress-title">{{ language.t(workProgress.kind() === 'create' ? 'workCreateTitle' : workProgress.kind() === 'open' ? 'workOpenTitle' : 'workDownloadTitle') }}</h2>
-      <p id="work-progress-description" role="status" aria-live="polite" aria-atomic="true">{{ language.t(workProgress.stage() === 'fetching' ? 'workFetching' : workProgress.stage() === 'uploading' ? 'workUploading' : workProgress.kind() === 'create' ? 'workEncrypting' : 'workDecrypting') }}</p>
+      <p id="work-progress-description" role="status" aria-live="polite" aria-atomic="true">{{ language.t(workProgress.stage() === 'preparing' ? 'workPreparing' : workProgress.stage() === 'fetching' ? 'workFetching' : workProgress.stage() === 'uploading' ? 'workUploading' : workProgress.kind() === 'create' ? 'workEncrypting' : 'workDecrypting') }}</p>
       @if (workProgress.files().length) {
         <ul class="work-progress-files" aria-label="{{ language.t('workFileStatuses') }}">
           @for (file of workProgress.files(); track $index) {

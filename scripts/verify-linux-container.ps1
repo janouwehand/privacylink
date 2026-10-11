@@ -11,6 +11,8 @@ try {
     & docker run --detach --name $containerName --publish '127.0.0.1::8080' `
         --env 'ASPNETCORE_ENVIRONMENT=Development' `
         --env 'ASPNETCORE_URLS=http://+:8080' `
+        --env ("Security__CreateProofHmacKey=" + [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))) `
+        --env 'Security__CreateProofDifficultyBits=1' `
         $imageTag
     if ($LASTEXITCODE -ne 0) { throw "Linux production image failed to start with exit code $LASTEXITCODE." }
 

@@ -2,21 +2,28 @@ import { Injectable } from '@angular/core';
 import { EncryptedFile, EncryptedFileMetadata, EncryptedMessage, EncryptedPayload, OpenedFile } from './secret-crypto';
 
 export class SecretApiError extends Error {
-  constructor(readonly status: number, readonly retryAfterSeconds: number | null = null) { super(`HTTP ${status}`); }
+  constructor(readonly status: number, readonly retryAfterSeconds: number | null = null, readonly code: string | null = null) { super(`HTTP ${status}`); }
+}
+
+interface CreateChallenge { version: number; challengeId: string; nonce: string; difficultyBits: number; expiresAt: number; signature: string }
+
+async function apiError(response: Response): Promise<SecretApiError> {
+  const retryAfter = Number.parseInt(response.headers.get('Retry-After') ?? '', 10);
+  let code: string | null = null;
+  try { code = (await response.json() as { code?: string }).code ?? null; } catch { /* A generic response is sufficient. */ }
+  return new SecretApiError(response.status, Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null, code);
 }
 
 async function responseJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
-    const retryAfter = Number.parseInt(response.headers.get('Retry-After') ?? '', 10);
-    throw new SecretApiError(response.status, Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null);
+    throw await apiError(response);
   }
   return response.json() as Promise<T>;
 }
 
 async function responseArrayBuffer(response: Response): Promise<ArrayBuffer> {
   if (!response.ok) {
-    const retryAfter = Number.parseInt(response.headers.get('Retry-After') ?? '', 10);
-    throw new SecretApiError(response.status, Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null);
+    throw await apiError(response);
   }
   return response.arrayBuffer();
 }
@@ -31,11 +38,14 @@ export class SecretApi {
   getFileUploadPolicy(): Promise<{ maxFiles: number; maxTotalFileBytes: number; allowedFileExtensions: string[] }> {
     return fetch('/api/v1/capabilities', { cache: 'no-store', referrerPolicy: 'no-referrer' }).then(response => responseJson(response));
   }
-  create(request: { protocolVersion: 1; expiry: '1d' | '7d' | '14d'; message: EncryptedMessage | null; files: EncryptedFile[]; password?: string }): Promise<{ id: string; expiresAt: string; passwordProtected: boolean; revokeToken: string }> {
-    return fetch('/api/v1/secrets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request), cache: 'no-store', referrerPolicy: 'no-referrer' }).then(response => responseJson<{ id: string; expiresAt: string; passwordProtected: boolean; revokeToken: string }>(response));
+  getCreateChallenge(): Promise<CreateChallenge> {
+    return fetch('/api/v1/secrets/create-challenge', { cache: 'no-store', referrerPolicy: 'no-referrer' }).then(response => responseJson<CreateChallenge>(response));
   }
-  createSerialized(body: ArrayBuffer): Promise<{ id: string; expiresAt: string; passwordProtected: boolean; revokeToken: string }> {
-    return fetch('/api/v1/secrets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, cache: 'no-store', referrerPolicy: 'no-referrer' }).then(response => responseJson<{ id: string; expiresAt: string; passwordProtected: boolean; revokeToken: string }>(response));
+  create(request: { protocolVersion: 1; expiry: '1d' | '7d' | '14d'; message: EncryptedMessage | null; files: EncryptedFile[]; password?: string }, proof: string): Promise<{ id: string; expiresAt: string; passwordProtected: boolean; revokeToken: string }> {
+    return fetch('/api/v1/secrets', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-PrivacyLink-Proof': proof }, body: JSON.stringify(request), cache: 'no-store', referrerPolicy: 'no-referrer' }).then(response => responseJson<{ id: string; expiresAt: string; passwordProtected: boolean; revokeToken: string }>(response));
+  }
+  createSerialized(body: ArrayBuffer, proof: string): Promise<{ id: string; expiresAt: string; passwordProtected: boolean; revokeToken: string }> {
+    return fetch('/api/v1/secrets', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-PrivacyLink-Proof': proof }, body, cache: 'no-store', referrerPolicy: 'no-referrer' }).then(response => responseJson<{ id: string; expiresAt: string; passwordProtected: boolean; revokeToken: string }>(response));
   }
   revoke(id: string, revokeToken: string): Promise<void> {
     return fetch(`/api/v1/secrets/${SecretApi.pathPart(id)}/revoke`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ revokeToken }), cache: 'no-store', referrerPolicy: 'no-referrer' }).then(response => {

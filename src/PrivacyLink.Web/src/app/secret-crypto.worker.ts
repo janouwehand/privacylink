@@ -1,6 +1,6 @@
 import { decryptFile, decryptFileName, decryptMessage, encodeBase64Url, encryptFile, EncryptedFile, EncryptedFileMetadata, EncryptedPayload, FileCryptoPhase, OpenedFile } from './secret-crypto';
 
-type Operation = 'encryptFile' | 'decryptFile' | 'decryptFileName' | 'serializeCreateRequest' | 'encryptFilesAndSerialize' | 'decryptOpenFileResponse' | 'decryptOpenSecretResponse' | 'decryptCachedFile' | 'clearCachedFiles';
+type Operation = 'encryptFile' | 'decryptFile' | 'decryptFileName' | 'serializeCreateRequest' | 'encryptFilesAndSerialize' | 'decryptOpenFileResponse' | 'decryptOpenSecretResponse' | 'decryptCachedFile' | 'clearCachedFiles' | 'solveCreateProof' | 'cancelProof';
 interface RequestMessage {
   id: number;
   operation: Operation;
@@ -19,6 +19,7 @@ const workerScope = globalThis as unknown as {
   postMessage(message: ResponseMessage, transfer?: Transferable[]): void;
 };
 const cachedSecrets = new Map<string, CachedSecret>();
+const cancelledProofs = new Set<number>();
 
 async function processRequest(data: RequestMessage): Promise<void> {
   const { id, operation, payload, clientKey, filename } = data;
@@ -32,6 +33,25 @@ async function processRequest(data: RequestMessage): Promise<void> {
   try {
     let result: unknown;
     switch (operation) {
+      case 'solveCreateProof': {
+        const challenge = payload as { challengeId: string; nonce: string; difficultyBits: number };
+        const encoder = new TextEncoder();
+        const maxCounter = 0xffffffffffffffffn;
+        for (let counter = 0n; counter <= maxCounter; counter++) {
+          if (cancelledProofs.has(id)) throw new Error('Proof calculation cancelled');
+          const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(`PrivacyLink-Create-PoW-v1:${challenge.challengeId}:${challenge.nonce}:${counter}`)));
+          let zeroBits = 0;
+          for (const byte of digest) {
+            if (byte === 0) { zeroBits += 8; continue; }
+            zeroBits += Math.clz32(byte) - 24;
+            break;
+          }
+          if (zeroBits >= challenge.difficultyBits) { result = counter.toString(); break; }
+          if ((counter & 2047n) === 2047n) await new Promise(resolve => setTimeout(resolve, 0));
+        }
+        if (result === undefined) throw new Error('Proof counter exhausted');
+        break;
+      }
       case 'encryptFile':
         result = await encryptFile(payload as File, clientKey as Uint8Array, reportProgress);
         break;
@@ -118,12 +138,15 @@ async function processRequest(data: RequestMessage): Promise<void> {
     }
   } catch (error) {
     workerScope.postMessage({ id, type: 'error', error: error instanceof Error ? error.message : 'File operation failed' });
+  } finally {
+    cancelledProofs.delete(id);
   }
 }
 
 // File operations are serialized to bound memory use when callers submit a batch concurrently.
 let queuedOperations = Promise.resolve();
 workerScope.onmessage = ({ data }) => {
+  if (data.operation === 'cancelProof') { cancelledProofs.add(data.payload as number); return; }
   queuedOperations = queuedOperations.then(() => processRequest(data));
 };
 

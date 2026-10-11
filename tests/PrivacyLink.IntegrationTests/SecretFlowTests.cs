@@ -4,16 +4,16 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 
-public sealed class SecretFlowTests : IClassFixture<WebApplicationFactory<Program>>
+public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
 {
     private readonly HttpClient _client;
-    public SecretFlowTests(WebApplicationFactory<Program> factory) => _client = factory.CreateClient();
+    public SecretFlowTests(TestApiFactory factory) => _client = factory.CreateClient();
 
     [Fact]
     public async Task CreateMetadataAndOpenReturnSameCiphertext()
     {
         var payload = new { protocolVersion = 1, expiry = "1d", message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" }, files = Array.Empty<object>() };
-        var created = await _client.PostAsJsonAsync("/api/v1/secrets", payload);
+        var created = await CreateProofTestHelper.CreateAsync(_client, payload);
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         using var body = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
         var id = body.RootElement.GetProperty("id").GetString();
@@ -28,7 +28,7 @@ public sealed class SecretFlowTests : IClassFixture<WebApplicationFactory<Progra
     [Fact]
     public async Task UnknownFieldsAndForeignOriginAreRejected()
     {
-        var invalid = await _client.PostAsJsonAsync("/api/v1/secrets", new { protocolVersion = 1, expiry = "1d", message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" }, files = Array.Empty<object>(), password = "1234", unexpected = true });
+        var invalid = await CreateProofTestHelper.CreateAsync(_client, new { protocolVersion = 1, expiry = "1d", message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" }, files = Array.Empty<object>(), password = "1234", unexpected = true });
         Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
         using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/secrets");
         request.Headers.Add("Origin", "https://evil.example");
@@ -37,9 +37,70 @@ public sealed class SecretFlowTests : IClassFixture<WebApplicationFactory<Progra
     }
 
     [Fact]
+    public async Task CreateRequiresProofBeforeBodyValidationAndConsumesItOnce()
+    {
+        using var noProof = await _client.PostAsync("/api/v1/secrets", new StringContent("not json", System.Text.Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.Forbidden, noProof.StatusCode);
+        Assert.Equal("{\"code\":\"proof_required\"}", await noProof.Content.ReadAsStringAsync());
+
+        var proof = await CreateProofTestHelper.GetProofAsync(_client);
+        var payload = new { protocolVersion = 1, expiry = "1d", message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" }, files = Array.Empty<object>() };
+        using var firstRequest = new HttpRequestMessage(HttpMethod.Post, "/api/v1/secrets") { Content = JsonContent.Create(payload) };
+        firstRequest.Headers.Add("X-PrivacyLink-Proof", proof);
+        using var first = await _client.SendAsync(firstRequest);
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+
+        using var replayRequest = new HttpRequestMessage(HttpMethod.Post, "/api/v1/secrets") { Content = JsonContent.Create(payload) };
+        replayRequest.Headers.Add("X-PrivacyLink-Proof", proof);
+        using var replay = await _client.SendAsync(replayRequest);
+        Assert.Equal(HttpStatusCode.Forbidden, replay.StatusCode);
+        Assert.Equal("{\"code\":\"proof_required\"}", await replay.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task ChallengeIsNotCachedAndExpiredOrMalformedProofIsRejected()
+    {
+        using var challenge = await _client.GetAsync("/api/v1/secrets/create-challenge");
+        Assert.Equal(HttpStatusCode.OK, challenge.StatusCode);
+        Assert.Equal("no-store", challenge.Headers.CacheControl?.ToString());
+
+        var payload = new { protocolVersion = 1, expiry = "1d", message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" }, files = Array.Empty<object>() };
+        var expiredProof = await CreateProofTestHelper.GetExpiredProofAsync(_client);
+        using var expiredRequest = new HttpRequestMessage(HttpMethod.Post, "/api/v1/secrets") { Content = JsonContent.Create(payload) };
+        expiredRequest.Headers.Add("X-PrivacyLink-Proof", expiredProof);
+        using var expired = await _client.SendAsync(expiredRequest);
+        Assert.Equal(HttpStatusCode.Forbidden, expired.StatusCode);
+        Assert.Equal("{\"code\":\"proof_required\"}", await expired.Content.ReadAsStringAsync());
+
+        using var malformedRequest = new HttpRequestMessage(HttpMethod.Post, "/api/v1/secrets") { Content = JsonContent.Create(payload) };
+        malformedRequest.Headers.Add("X-PrivacyLink-Proof", "malformed");
+        using var malformed = await _client.SendAsync(malformedRequest);
+        Assert.Equal(HttpStatusCode.Forbidden, malformed.StatusCode);
+        Assert.Equal("{\"code\":\"proof_required\"}", await malformed.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task FullReplayStoreReturnsRetryAfterBeforeReadingCreateBody()
+    {
+        using var factory = new TestApiFactory().WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Tests:CreateProofReplayFull"] = "true"
+        })));
+        using var client = factory.CreateClient();
+        var proof = await CreateProofTestHelper.GetProofAsync(client);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/secrets") { Content = new StringContent("not json", System.Text.Encoding.UTF8, "application/json") };
+        request.Headers.Add("X-PrivacyLink-Proof", proof);
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("5", response.Headers.GetValues("Retry-After").Single());
+        Assert.Equal("{\"code\":\"temporarily_unavailable\"}", await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
     public async Task InvalidProtocolAndUnknownIdsAreRejected()
     {
-        var invalid = await _client.PostAsJsonAsync("/api/v1/secrets", new { protocolVersion = 2, expiry = "1d", message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" }, files = Array.Empty<object>() });
+        var invalid = await CreateProofTestHelper.CreateAsync(_client, new { protocolVersion = 2, expiry = "1d", message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" }, files = Array.Empty<object>() });
         Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
         var unknown = await _client.GetAsync("/api/v1/secrets/AAAAAAAAAAAAAAAAAAAAAA");
         Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
@@ -65,7 +126,7 @@ public sealed class SecretFlowTests : IClassFixture<WebApplicationFactory<Progra
         Assert.Equal(HttpStatusCode.Forbidden, (await _client.SendAsync(foreign)).StatusCode);
 
         var largeCiphertext = Convert.ToBase64String(new byte[262161]).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-        var oversized = await _client.PostAsJsonAsync("/api/v1/secrets", new { protocolVersion = 1, expiry = "1d", message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = largeCiphertext }, files = Array.Empty<object>() });
+        var oversized = await CreateProofTestHelper.CreateAsync(_client, new { protocolVersion = 1, expiry = "1d", message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = largeCiphertext }, files = Array.Empty<object>() });
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, oversized.StatusCode);
     }
 
@@ -74,7 +135,7 @@ public sealed class SecretFlowTests : IClassFixture<WebApplicationFactory<Progra
     {
         var fileId = Convert.ToBase64String(new byte[16]).TrimEnd('=').Replace('+', '-').Replace('/', '_');
         var payload = new { protocolVersion = 1, expiry = "1d", files = new[] { new { id = fileId, extension = ".txt", nameNonce = "AAAAAAAAAAAAAAAA", nameCiphertext = "AAAAAAAAAAAAAAAAAAAAAA", mimeType = "text/plain", size = 1L, nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" } } };
-        var created = await _client.PostAsJsonAsync("/api/v1/secrets", payload);
+        var created = await CreateProofTestHelper.CreateAsync(_client, payload);
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString();
         var metadata = await _client.GetFromJsonAsync<JsonElement>($"/api/v1/secrets/{id}");
@@ -98,15 +159,15 @@ public sealed class SecretFlowTests : IClassFixture<WebApplicationFactory<Progra
     {
         var fileId = Convert.ToBase64String(new byte[16]).TrimEnd('=').Replace('+', '-').Replace('/', '_');
         var invalid = new { protocolVersion = 1, expiry = "1d", files = new[] { new { id = fileId, extension = ".exe", nameNonce = "AAAAAAAAAAAAAAAA", nameCiphertext = "AAAAAAAAAAAAAAAAAAAAAA", mimeType = "application/octet-stream", size = 1L, nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" } } };
-        Assert.Equal(HttpStatusCode.BadRequest, (await _client.PostAsJsonAsync("/api/v1/secrets", invalid)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await CreateProofTestHelper.CreateAsync(_client, invalid)).StatusCode);
         var files = Enumerable.Range(0, 11).Select(i => new { id = Convert.ToBase64String(BitConverter.GetBytes(i).Concat(new byte[8]).ToArray()).TrimEnd('=').Replace('+', '-').Replace('/', '_'), extension = ".txt", nameNonce = "AAAAAAAAAAAAAAAA", nameCiphertext = "AAAAAAAAAAAAAAAAAAAAAA", mimeType = "text/plain", size = 1L, nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" }).ToArray();
-        Assert.Equal(HttpStatusCode.BadRequest, (await _client.PostAsJsonAsync("/api/v1/secrets", new { protocolVersion = 1, expiry = "1d", files })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await CreateProofTestHelper.CreateAsync(_client, new { protocolVersion = 1, expiry = "1d", files })).StatusCode);
     }
 
     [Fact]
     public async Task ProtectedSecretRequiresPasswordAndUnlockReturnsClientCiphertext()
     {
-        using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
+        using var factory = new TestApiFactory().WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Security:PasswordPepper"] = "integration-test-pepper",
             ["Security:Argon2:MemorySizeKb"] = "8192",
@@ -115,7 +176,7 @@ public sealed class SecretFlowTests : IClassFixture<WebApplicationFactory<Progra
         })));
         using var client = factory.CreateClient();
         var payload = new { protocolVersion = 1, expiry = "1d", password = "correct horse", message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" }, files = Array.Empty<object>() };
-        var created = await client.PostAsJsonAsync("/api/v1/secrets", payload);
+        var created = await CreateProofTestHelper.CreateAsync(client, payload);
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         var createdBody = await created.Content.ReadFromJsonAsync<JsonElement>();
         var id = createdBody.GetProperty("id").GetString();
@@ -132,7 +193,7 @@ public sealed class SecretFlowTests : IClassFixture<WebApplicationFactory<Progra
     [Fact]
     public async Task ProtectedSecretCooldownReturnsRateLimitAfterConfiguredAttempts()
     {
-        using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
+        using var factory = new TestApiFactory().WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Security:PasswordPepper"] = "integration-test-pepper",
             ["Security:Argon2:MemorySizeKb"] = "8192",
@@ -142,7 +203,7 @@ public sealed class SecretFlowTests : IClassFixture<WebApplicationFactory<Progra
         })));
         using var client = factory.CreateClient();
         var payload = new { protocolVersion = 1, expiry = "1d", password = "correct horse", message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" }, files = Array.Empty<object>() };
-        var created = await client.PostAsJsonAsync("/api/v1/secrets", payload);
+        var created = await CreateProofTestHelper.CreateAsync(client, payload);
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString();
 
@@ -159,7 +220,7 @@ public sealed class SecretFlowTests : IClassFixture<WebApplicationFactory<Progra
     [Fact]
     public async Task ProtectedFileOnlySecretExposesFileCountBeforeUnlock()
     {
-        using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
+        using var factory = new TestApiFactory().WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Security:PasswordPepper"] = "integration-test-pepper",
             ["Security:Argon2:MemorySizeKb"] = "8192",
@@ -170,7 +231,7 @@ public sealed class SecretFlowTests : IClassFixture<WebApplicationFactory<Progra
         var fileId = Convert.ToBase64String(new byte[16]).TrimEnd('=').Replace('+', '-').Replace('/', '_');
         var payload = new { protocolVersion = 1, expiry = "1d", password = "1234", files = new[] { new { id = fileId, extension = ".txt", nameNonce = "AAAAAAAAAAAAAAAA", nameCiphertext = "AAAAAAAAAAAAAAAAAAAAAA", mimeType = "text/plain", size = 1L, nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" } } };
 
-        var created = await client.PostAsJsonAsync("/api/v1/secrets", payload);
+        var created = await CreateProofTestHelper.CreateAsync(client, payload);
         var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString();
         var metadata = await client.GetFromJsonAsync<JsonElement>($"/api/v1/secrets/{id}");
 
@@ -192,7 +253,7 @@ public sealed class SecretFlowTests : IClassFixture<WebApplicationFactory<Progra
     {
         var payload = new { protocolVersion = 1, expiry = "1d", password = "correct horse", message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" }, files = Array.Empty<object>() };
 
-        var created = await _client.PostAsJsonAsync("/api/v1/secrets", payload);
+        var created = await CreateProofTestHelper.CreateAsync(_client, payload);
 
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         Assert.True((await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("passwordProtected").GetBoolean());
@@ -227,7 +288,7 @@ public sealed class SecretFlowTests : IClassFixture<WebApplicationFactory<Progra
     [Fact]
     public async Task TrustedForwardedForAddressesUseTheConfiguredClientIdentity()
     {
-        using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
+        using var factory = new TestApiFactory().WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Security:TrustedProxies:0"] = "127.0.0.1",
             ["RateLimiting:CreatePerIpPerHour"] = "1",
@@ -236,15 +297,11 @@ public sealed class SecretFlowTests : IClassFixture<WebApplicationFactory<Progra
         using var client = factory.CreateClient();
 
         static object Payload() => new { protocolVersion = 1, expiry = "1d", message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = Convert.ToBase64String(new byte[17]).TrimEnd('=').Replace('+', '-').Replace('/', '_') }, files = Array.Empty<object>() };
-        using var first = new HttpRequestMessage(HttpMethod.Post, "/api/v1/secrets");
-        first.Headers.Add("X-Forwarded-For", "198.51.100.10");
-        first.Content = JsonContent.Create(Payload());
-        using var second = new HttpRequestMessage(HttpMethod.Post, "/api/v1/secrets");
-        second.Headers.Add("X-Forwarded-For", "198.51.100.11");
-        second.Content = JsonContent.Create(Payload());
+        using var first = await CreateProofTestHelper.CreateAsync(client, Payload(), request => request.Headers.Add("X-Forwarded-For", "198.51.100.10"));
+        using var second = await CreateProofTestHelper.CreateAsync(client, Payload(), request => request.Headers.Add("X-Forwarded-For", "198.51.100.11"));
 
-        Assert.Equal(HttpStatusCode.Created, (await client.SendAsync(first)).StatusCode);
-        Assert.Equal(HttpStatusCode.Created, (await client.SendAsync(second)).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, second.StatusCode);
     }
 
     [Fact]
@@ -252,7 +309,7 @@ public sealed class SecretFlowTests : IClassFixture<WebApplicationFactory<Progra
     {
         var fileId = Convert.ToBase64String(new byte[16]).TrimEnd('=').Replace('+', '-').Replace('/', '_');
         var payload = new { protocolVersion = 1, expiry = "1d", files = new[] { new { id = fileId, extension = ".txt", nameNonce = "AAAAAAAAAAAAAAAA", nameCiphertext = "AAAAAAAAAAAAAAAAAAAAAA", mimeType = "text/plain\r\nX-Leak: secret-password", size = 1L, nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" } } };
-        using var response = await _client.PostAsJsonAsync("/api/v1/secrets", payload);
+        using var response = await CreateProofTestHelper.CreateAsync(_client, payload);
         var content = await response.Content.ReadAsStringAsync();
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
@@ -263,7 +320,7 @@ public sealed class SecretFlowTests : IClassFixture<WebApplicationFactory<Progra
     [Fact]
     public async Task UnlockRateLimitAppliesBeforeRepeatedPasswordAttempts()
     {
-        using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
+        using var factory = new TestApiFactory().WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Security:PasswordPepper"] = "integration-test-pepper",
             ["Security:Argon2:MemorySizeKb"] = "8192",
@@ -274,7 +331,7 @@ public sealed class SecretFlowTests : IClassFixture<WebApplicationFactory<Progra
         })));
         using var client = factory.CreateClient();
         var payload = new { protocolVersion = 1, expiry = "1d", password = "correct horse", message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" }, files = Array.Empty<object>() };
-        var created = await client.PostAsJsonAsync("/api/v1/secrets", payload);
+        var created = await CreateProofTestHelper.CreateAsync(client, payload);
         var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString();
 
         Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsJsonAsync($"/api/v1/secrets/{id}/unlock", new { password = "wrong horse" })).StatusCode);

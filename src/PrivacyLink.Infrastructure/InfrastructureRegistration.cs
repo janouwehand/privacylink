@@ -10,8 +10,10 @@ public static class InfrastructureRegistration
     {
         services.AddSingleton<StorageHealth>();
         services.AddSingleton<IStorageReadiness>(sp => sp.GetRequiredService<StorageHealth>());
-        if (configuration.GetConnectionString("PrivacyLink") is not null)
+        if (!string.IsNullOrWhiteSpace(configuration.GetConnectionString("PrivacyLink")))
         {
+            services.AddSingleton<ICreateProofReplayStore, PostgresCreateProofReplayStore>();
+            services.AddHostedService<CreateProofReplayCleanupService>();
             services.AddSingleton<PostgresSecretRequestAuditWriter>();
             services.AddSingleton<ISecretRequestAuditWriter>(sp => sp.GetRequiredService<PostgresSecretRequestAuditWriter>());
             services.AddSingleton<ISecretRequestAuditReader>(sp => sp.GetRequiredService<PostgresSecretRequestAuditWriter>());
@@ -26,6 +28,7 @@ public static class InfrastructureRegistration
         }
         else
         {
+            services.AddSingleton<ICreateProofReplayStore, UnavailableCreateProofReplayStore>();
             services.AddSingleton<InMemorySecretRequestAuditWriter>();
             services.AddSingleton<ISecretRequestAuditWriter>(sp => sp.GetRequiredService<InMemorySecretRequestAuditWriter>());
             services.AddSingleton<ISecretRequestAuditReader>(sp => sp.GetRequiredService<InMemorySecretRequestAuditWriter>());

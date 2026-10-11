@@ -73,7 +73,17 @@ describe('SecretApi unlock retries', () => {
     vi.stubGlobal('fetch', fetchMock);
     const body = new TextEncoder().encode('{"protocolVersion":1,"files":[]}').buffer;
 
-    await expect(new SecretApi().createSerialized(body)).resolves.toEqual(result);
+    await expect(new SecretApi().createSerialized(body, 'challenge.nonce.1.1791747900.signature.0')).resolves.toEqual(result);
     expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(body);
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toEqual({ 'Content-Type': 'application/json', 'X-PrivacyLink-Proof': 'challenge.nonce.1.1791747900.signature.0' });
+  });
+
+  it('reads the stateless create challenge without caching it', async () => {
+    const challenge = { version: 1, challengeId: 'challenge', nonce: 'nonce', difficultyBits: 17, expiresAt: 1791747900, signature: 'signature' };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(challenge), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(new SecretApi().getCreateChallenge()).resolves.toEqual(challenge);
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/secrets/create-challenge', expect.objectContaining({ cache: 'no-store' }));
   });
 });

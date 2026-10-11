@@ -17,7 +17,9 @@ class InlineCryptoWorker extends EventTarget {
   postMessage(message: { id: number; operation: string; payload: unknown; clientKey: string | Uint8Array }): void {
     void (async () => {
       let result: unknown;
-      if (message.operation === 'decryptOpenSecretResponse') {
+      if (message.operation === 'solveCreateProof') {
+        result = '0';
+      } else if (message.operation === 'decryptOpenSecretResponse') {
         const payload = JSON.parse(new TextDecoder().decode(message.payload as ArrayBuffer));
         const text = payload.message ? await decryptMessage(payload, message.clientKey as string) : null;
         const files = await Promise.all(payload.files.map(async (file: Parameters<typeof decryptFileName>[0]) => ({
@@ -57,6 +59,7 @@ class InlineCryptoWorker extends EventTarget {
 function createSecretApiStub() {
   return {
     getFileUploadPolicy: vi.fn().mockResolvedValue({ maxFiles: 15, maxTotalFileBytes: 75 * 1024 * 1024, allowedFileExtensions: ['.txt'] }),
+    getCreateChallenge: vi.fn().mockResolvedValue({ version: 1, challengeId: 'AAAAAAAAAAAAAAAAAAAAAA', nonce: 'AAAAAAAAAAAAAAAAAAAAAA', difficultyBits: 1, expiresAt: Math.floor(Date.now() / 1000) + 300, signature: 'test-signature' }),
     create: vi.fn().mockResolvedValue({ id: 'AAAAAAAAAAAAAAAAAAAAAA', expiresAt: '2030-01-01T00:00:00.000Z', passwordProtected: false, revokeToken: 'test-revoke-token' }),
     createSerialized: vi.fn((_body: ArrayBuffer) => Promise.resolve({ id: 'AAAAAAAAAAAAAAAAAAAAAA', expiresAt: '2030-01-01T00:00:00.000Z', passwordProtected: false, revokeToken: 'test-revoke-token' })),
     revoke: vi.fn().mockResolvedValue(undefined),
@@ -289,7 +292,7 @@ describe('App', () => {
     expect(link.search).toBe('');
     expect(link.hash).toMatch(/^#[A-Za-z0-9_-]{43}$/);
     expect(TestBed.inject(Router).url).toBe('/');
-    expect(api.create).toHaveBeenCalledWith(expect.not.objectContaining({ clientKey: expect.any(String) }));
+    expect(api.create).toHaveBeenCalledWith(expect.not.objectContaining({ clientKey: expect.any(String) }), expect.stringMatching(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[0-9]+\.[0-9]+\.[A-Za-z0-9_-]+\.[0-9]+$/));
   });
 
   it('keeps history cell labels available to the compact layout', async () => {
