@@ -198,9 +198,9 @@ h2 { font-size: 18px; margin: 0 0 26px; }
 .opened-message-section, .opened-files-section { min-width: 0; }
 .opened-files-section .download-list { margin-top: 0; }
 .opened-recipient-card .message-display { min-height: 0; }
-footer { text-align: center; padding: 25px; color: #888; font-size: 12px; }
+footer { position: fixed; z-index: 20; right: 0; bottom: 0; left: 0; width: 100%; padding: 6px max(16px, calc((100% - 1280px) / 2 + 30px)); background: #000; color: #fff; text-align: left; font-size: 12px; line-height: 1.2; }
 footer a { color: inherit; text-underline-offset: 2px; }
-footer a:hover, footer a:focus-visible { color: #16333A; }
+footer a:hover, footer a:focus-visible { color: #8cc8bb; }
 
 @media (max-width: 700px) {
   .topbar { padding: 18px 16px; }
