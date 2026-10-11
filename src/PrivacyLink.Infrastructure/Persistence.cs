@@ -355,6 +355,14 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
                 CREATE INDEX ix_secret_request_audit_secret_started ON secret_request_audit (secret_id, started_at, id);
                 CREATE INDEX ix_secret_request_audit_started ON secret_request_audit (started_at, id);
                 """
+            ,
+            [8] = """
+                CREATE TABLE IF NOT EXISTS create_proof_replays (
+                    challenge_id text PRIMARY KEY CHECK (length(challenge_id) = 22),
+                    expires_at timestamptz NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS ix_create_proof_replays_expires_at ON create_proof_replays (expires_at);
+                """
         };
         foreach (var (version, sql) in migrations.OrderBy(pair => pair.Key))
         {

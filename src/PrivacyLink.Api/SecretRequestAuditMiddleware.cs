@@ -15,6 +15,11 @@ internal sealed class SecretRequestAuditMiddleware(IConfiguration configuration,
     public async Task InvokeAsync(HttpContext context, RequestDelegate next)
     {
         var path = context.Request.Path.Value ?? string.Empty;
+        if (HttpMethods.IsGet(context.Request.Method) && path.Equals("/api/v1/secrets/create-challenge", StringComparison.OrdinalIgnoreCase))
+        {
+            await next(context);
+            return;
+        }
         var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
         var secretApi = path.Equals("/api/v1/secrets", StringComparison.OrdinalIgnoreCase) || path.StartsWith("/api/v1/secrets/", StringComparison.OrdinalIgnoreCase);
         var secretPage = segments.Length == 2 && segments[0].Equals("s", StringComparison.OrdinalIgnoreCase);

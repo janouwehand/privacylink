@@ -17,9 +17,18 @@ internal static class SecretEndpoints
         return Results.Json(new FileUploadPolicyResponse(maxFiles, maxFileBytes, AllowedExtensions(configuration).OrderBy(extension => extension, StringComparer.Ordinal).ToArray()), PrivacyLinkJsonContext.Default.FileUploadPolicyResponse);
     }
 
-    public static async Task<IResult> Create(HttpRequest request, HttpContext context, SecretApplicationService service, IConfiguration configuration)
+    public static IResult CreateChallenge(CreateProofOfWork proofOfWork) => Results.Json(proofOfWork.Issue(), PrivacyLinkJsonContext.Default.CreateChallengeResponse);
+
+    public static async Task<IResult> Create(HttpRequest request, HttpContext context, SecretApplicationService service, IConfiguration configuration, CreateProofOfWork proofOfWork)
     {
         var cancellationToken = request.HttpContext.RequestAborted;
+        var proof = await proofOfWork.ValidateAndConsumeAsync(request.Headers["X-PrivacyLink-Proof"].ToString(), cancellationToken);
+        if (proof == ProofCheckResult.Unavailable)
+        {
+            context.Response.Headers.RetryAfter = "5";
+            return Error(503, "temporarily_unavailable");
+        }
+        if (proof != ProofCheckResult.Valid) return Error(403, "proof_required");
         var maxMessage = Limit(configuration, "Limits:MaxMessagePlaintextBytes", 80000);
         var maxFiles = Limit(configuration, "Limits:MaxFiles", 15);
         var maxFileBytes = LimitLong(configuration, "Limits:MaxTotalPlaintextFileBytes", 75 * 1024 * 1024);

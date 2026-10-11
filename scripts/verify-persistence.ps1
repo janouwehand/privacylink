@@ -11,6 +11,8 @@ $apiProcess = $null
 $oldConnection = $env:ConnectionStrings__PrivacyLink
 $oldBlobPath = $env:Storage__BlobPath
 $oldEnvironment = $env:ASPNETCORE_ENVIRONMENT
+$oldCreateProofKey = $env:Security__CreateProofHmacKey
+$oldCreateProofDifficulty = $env:Security__CreateProofDifficultyBits
 
 function Invoke-Docker([string[]] $Arguments) {
     & docker @Arguments
@@ -34,6 +36,8 @@ try {
     $env:ConnectionStrings__PrivacyLink = "Host=127.0.0.1;Port=$hostPort;Database=privacylink;Username=privacylink;Password=persistence-test-only"
     $env:Storage__BlobPath = $blobPath
     $env:ASPNETCORE_ENVIRONMENT = 'Development'
+    $env:Security__CreateProofHmacKey = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+    $env:Security__CreateProofDifficultyBits = '1'
     $apiLog = Join-Path $runRoot 'api.log'
     $apiErrorLog = Join-Path $runRoot 'api-error.log'
     $apiProcess = Start-Process dotnet -ArgumentList 'run --project src/PrivacyLink.Api/PrivacyLink.Api.csproj --no-launch-profile --urls http://127.0.0.1:5089' -WorkingDirectory $repoRoot -RedirectStandardOutput $apiLog -RedirectStandardError $apiErrorLog -WindowStyle Hidden -PassThru
@@ -49,7 +53,15 @@ try {
     if (-not $ready) { throw 'PrivacyLink API did not become ready against PostgreSQL.' }
 
     $payload = @{ protocolVersion = 1; expiry = '1d'; message = @{ nonce = 'AAAAAAAAAAAAAAAA'; ciphertext = 'AAAAAAAAAAAAAAAAAAAAAAA' }; files = @() } | ConvertTo-Json -Compress
-    $created = Invoke-RestMethod 'http://127.0.0.1:5089/api/v1/secrets' -Method Post -ContentType 'application/json' -Body $payload
+    $challenge = Invoke-RestMethod 'http://127.0.0.1:5089/api/v1/secrets/create-challenge' -Method Get
+    $counter = [UInt64]0
+    do {
+        $proofText = "PrivacyLink-Create-PoW-v1:$($challenge.challengeId):$($challenge.nonce):$counter"
+        $digest = [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($proofText))
+        $counter++
+    } while (($digest[0] -band 0x80) -ne 0)
+    $proof = "$($challenge.challengeId).$($challenge.nonce).$($challenge.difficultyBits).$($challenge.expiresAt).$($challenge.signature).$($counter - 1)"
+    $created = Invoke-RestMethod 'http://127.0.0.1:5089/api/v1/secrets' -Method Post -ContentType 'application/json' -Headers @{ 'X-PrivacyLink-Proof' = $proof } -Body $payload
     if ([string]::IsNullOrWhiteSpace($created.id)) { throw 'API did not create a persistence test secret.' }
 
     $legacyStatsTables = (& docker exec $container psql -U privacylink -d privacylink -tAc "SELECT (to_regclass('public.stats_daily') IS NULL AND to_regclass('public.stats_visitors_daily') IS NULL)").Trim()
@@ -78,5 +90,7 @@ finally {
     $env:ConnectionStrings__PrivacyLink = $oldConnection
     $env:Storage__BlobPath = $oldBlobPath
     $env:ASPNETCORE_ENVIRONMENT = $oldEnvironment
+    $env:Security__CreateProofHmacKey = $oldCreateProofKey
+    $env:Security__CreateProofDifficultyBits = $oldCreateProofDifficulty
     if (Test-Path $runRoot) { Remove-Item -LiteralPath $runRoot -Recurse -Force }
 }

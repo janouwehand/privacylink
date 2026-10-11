@@ -1,4 +1,4 @@
-import { AfterViewInit, Component, inject } from '@angular/core';
+import { AfterViewInit, Component, inject, OnDestroy } from '@angular/core';
 import { DatePipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { AppState } from '../app-state';
@@ -10,7 +10,7 @@ import { CreateState } from './create-state';
   imports: [DatePipe, RouterLink],
   templateUrl: './create-page.html'
 })
-export class CreatePage implements AfterViewInit {
+export class CreatePage implements AfterViewInit, OnDestroy {
   protected readonly app = inject(AppState);
   protected readonly create = inject(CreateState);
   protected readonly language = inject(LanguageState);
@@ -23,4 +23,6 @@ export class CreatePage implements AfterViewInit {
   ngAfterViewInit(): void {
     if (this.app.mode() === 'create') document.getElementById('message')?.focus();
   }
+
+  ngOnDestroy(): void { this.create.onPageExit(); }
 }

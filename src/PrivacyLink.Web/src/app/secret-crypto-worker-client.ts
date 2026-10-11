@@ -13,7 +13,7 @@ export interface DecryptedFileResult { filename: string; mimeType: string; data:
 export interface DecryptedSecretFile { id: string; extension: string; name: string; mimeType: string; size: number }
 export interface DecryptedSecretResponse { token: string; message: string | null; files: DecryptedSecretFile[] }
 
-type Operation = 'encryptFile' | 'decryptFile' | 'decryptFileName' | 'serializeCreateRequest' | 'encryptFilesAndSerialize' | 'decryptOpenFileResponse' | 'decryptOpenSecretResponse' | 'decryptCachedFile' | 'clearCachedFiles';
+type Operation = 'encryptFile' | 'decryptFile' | 'decryptFileName' | 'serializeCreateRequest' | 'encryptFilesAndSerialize' | 'decryptOpenFileResponse' | 'decryptOpenSecretResponse' | 'decryptCachedFile' | 'clearCachedFiles' | 'solveCreateProof' | 'cancelProof';
 interface RequestMessage {
   id: number;
   operation: Operation;
@@ -94,6 +94,10 @@ export class SecretCryptoWorkerClient {
     return this.request<void>('clearCachedFiles', token, '');
   }
 
+  solveCreateProof(challenge: { challengeId: string; nonce: string; difficultyBits: number }, signal?: AbortSignal): Promise<string> {
+    return this.request<string>('solveCreateProof', challenge, '', undefined, undefined, [], signal);
+  }
+
   dispose(): void {
     this.worker?.removeEventListener('message', this.handleMessage);
     this.worker?.removeEventListener('error', this.handleWorkerError);
@@ -103,8 +107,9 @@ export class SecretCryptoWorkerClient {
     this.failPending(new Error('File crypto worker was disposed'));
   }
 
-  private request<T>(operation: Operation, payload: unknown, clientKey: string | Uint8Array, onProgress?: SecretCryptoProgressCallback, filename?: string, transfer: Transferable[] = []): Promise<T> {
+  private request<T>(operation: Operation, payload: unknown, clientKey: string | Uint8Array, onProgress?: SecretCryptoProgressCallback, filename?: string, transfer: Transferable[] = [], signal?: AbortSignal): Promise<T> {
     return new Promise<T>((resolve, reject) => {
+      if (signal?.aborted) { reject(new DOMException('Operation cancelled', 'AbortError')); return; }
       let worker: Worker;
       try {
         worker = this.getWorker();
@@ -114,7 +119,15 @@ export class SecretCryptoWorkerClient {
       }
 
       const id = ++this.nextId;
-      this.pending.set(id, { resolve: value => resolve(value as T), reject, onProgress, filename });
+      const onAbort = (): void => {
+        if (!this.pending.delete(id)) return;
+        worker.postMessage({ id, operation: 'cancelProof', payload: id, clientKey: '' } satisfies RequestMessage);
+        reject(new DOMException('Operation cancelled', 'AbortError'));
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      const settleResolve = (value: unknown): void => { signal?.removeEventListener('abort', onAbort); resolve(value as T); };
+      const settleReject = (error: Error): void => { signal?.removeEventListener('abort', onAbort); reject(error); };
+      this.pending.set(id, { resolve: settleResolve, reject: settleReject, onProgress, filename });
       const message: RequestMessage = {
         id,
         operation,
@@ -126,6 +139,7 @@ export class SecretCryptoWorkerClient {
         worker.postMessage(message, transfer);
       } catch (error) {
         this.pending.delete(id);
+        signal?.removeEventListener('abort', onAbort);
         reject(error instanceof Error ? error : new Error('Could not send file operation to worker'));
       }
     });

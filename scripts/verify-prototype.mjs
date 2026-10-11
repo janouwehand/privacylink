@@ -4,7 +4,7 @@
 // Uses disposable random content. Never print messages, keys, IDs or full URLs.
 
 import assert from 'node:assert/strict';
-import { randomBytes, webcrypto } from 'node:crypto';
+import { createHash, randomBytes, webcrypto } from 'node:crypto';
 
 const base = new URL(process.argv[2] ?? 'http://localhost:5080');
 if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password || base.search || base.hash) {
@@ -32,6 +32,8 @@ function headers(response) {
 
 async function request(path, method = 'GET', value, extraHeaders = {}) {
   const options = { method, headers: { ...extraHeaders }, redirect: 'manual' };
+  if (method === 'POST' && path === '/api/v1/secrets' && !options.headers['X-PrivacyLink-Proof'])
+    options.headers['X-PrivacyLink-Proof'] = await createProofHeader();
   if (value !== undefined) {
     options.headers['content-type'] = 'application/json';
     options.body = JSON.stringify(value);
@@ -42,6 +44,25 @@ async function request(path, method = 'GET', value, extraHeaders = {}) {
   let json;
   try { json = raw ? JSON.parse(raw) : undefined; } catch { throw new Error(`Non-JSON response: HTTP ${response.status}`); }
   return { response, json, raw };
+}
+
+async function createProofHeader() {
+  const challengeResponse = await fetch(new URL('/api/v1/secrets/create-challenge', base), { cache: 'no-store', redirect: 'manual' });
+  headers(challengeResponse);
+  if (!challengeResponse.ok) throw new Error(`Challenge request failed: HTTP ${challengeResponse.status}`);
+  const challenge = await challengeResponse.json();
+  for (let counter = 0n; counter <= 0xffffffffffffffffn; counter++) {
+    const digest = createHash('sha256').update(`PrivacyLink-Create-PoW-v1:${challenge.challengeId}:${challenge.nonce}:${counter}`).digest();
+    let zeros = 0;
+    for (const byte of digest) {
+      if (byte === 0) { zeros += 8; continue; }
+      zeros += Math.clz32(byte) - 24;
+      break;
+    }
+    if (zeros >= challenge.difficultyBits)
+      return `${challenge.challengeId}.${challenge.nonce}.${challenge.difficultyBits}.${challenge.expiresAt}.${challenge.signature}.${counter}`;
+  }
+  throw new Error('Proof counter exhausted');
 }
 
 function expectStatus(actual, status, label) {
@@ -144,7 +165,7 @@ async function main() {
   await expectRejected('/api/v1/secrets', 'POST', create, 403, 'cross-site fetch', { 'sec-fetch-site': 'cross-site' });
   await expectRejected(`/api/v1/secrets/${id}/open`, 'POST', { unexpected: true }, 400, 'open with body');
   const wrongMedia = await fetch(new URL('/api/v1/secrets', base), {
-    method: 'POST', headers: { 'content-type': 'text/plain' }, body: 'not JSON', redirect: 'manual'
+    method: 'POST', headers: { 'content-type': 'text/plain', 'X-PrivacyLink-Proof': await createProofHeader() }, body: 'not JSON', redirect: 'manual'
   });
   headers(wrongMedia);
   expectStatus({ response: wrongMedia }, 415, 'unsupported media type');
@@ -152,7 +173,7 @@ async function main() {
     ...create, message: { ...create.message, ciphertext: b64(randomBytes(262145 + 16)) }
   }, 413, 'oversized decoded message');
   const oversizedRaw = await fetch(new URL('/api/v1/secrets', base), {
-    method: 'POST', headers: { 'content-type': 'application/json' },
+    method: 'POST', headers: { 'content-type': 'application/json', 'X-PrivacyLink-Proof': await createProofHeader() },
     body: ' '.repeat(110 * 1024 * 1024 + 1), redirect: 'manual'
   });
   headers(oversizedRaw);

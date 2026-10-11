@@ -16,7 +16,6 @@ if (args.Length == 1 && args[0] == "--healthcheck")
 
 var builder = WebApplication.CreateSlimBuilder(args);
 SecretStoreConfiguration.ApplyFileSecrets(builder.Configuration);
-ProductionConfiguration.Validate(builder.Configuration, builder.Environment.IsProduction());
 builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.TypeInfoResolverChain.Insert(0, PrivacyLinkJsonContext.Default));
 builder.Services.AddSingleton<AdminPasswordVerifier>();
@@ -42,11 +41,12 @@ builder.WebHost.ConfigureKestrel(options =>
 });
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
-    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    var trustedProxyAddresses = builder.Configuration.GetSection("Security:TrustedProxies").GetChildren().Select(section => section.Value).OfType<string>()
+        .Where(value => IPAddress.TryParse(value, out _)).Select(value => IPAddress.Parse(value)).ToArray();
+    options.ForwardedHeaders = trustedProxyAddresses.Length == 0 ? ForwardedHeaders.None : ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
     options.KnownIPNetworks.Clear();
     options.KnownProxies.Clear();
-    foreach (var value in builder.Configuration.GetSection("Security:TrustedProxies").GetChildren().Select(section => section.Value).OfType<string>())
-        if (IPAddress.TryParse(value, out var address)) options.KnownProxies.Add(address);
+    foreach (var address in trustedProxyAddresses) options.KnownProxies.Add(address);
 });
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(sp => new PasswordEnvelopeService(new PasswordEnvelopeOptions(
@@ -58,12 +58,15 @@ builder.Services.AddSingleton(sp => new PasswordEnvelopeService(new PasswordEnve
     BoundedLimit(builder.Configuration, "Security:Argon2:MaxQueuedUnlocks", 8, 0, 64),
     BoundedLimit(builder.Configuration, "Security:Argon2:UnlockQueueTimeoutSeconds", 30, 1, 120))));
 builder.Services.AddSingleton<SecretApplicationService>();
+builder.Services.AddSingleton<CreateProofOfWork>();
 builder.Services.AddTransient<SecretRequestAuditMiddleware>();
 builder.Services.AddPrivacyLinkInfrastructure(builder.Configuration);
 builder.Services.AddRateLimiter(options =>
 {
     var createPerHour = int.TryParse(builder.Configuration["RateLimiting:CreatePerIpPerHour"], out var hour) && hour > 0 ? hour : 20;
     var createPerDay = int.TryParse(builder.Configuration["RateLimiting:CreatePerIpPerDay"], out var day) && day > 0 ? day : 100;
+    var challengePerHour = Math.Max(20L, (long)createPerHour * 2);
+    var challengePerDay = Math.Max(400L, (long)createPerDay * 4);
     var openPerMinute = int.TryParse(builder.Configuration["RateLimiting:OpenPerIpPerMinute"], out var minute) && minute > 0 ? minute : 30;
     // Legacy PerSecret keys remain accepted; when both names are configured, the legacy key wins.
     var unlockPerMinute = PositiveLimit(builder.Configuration, 5, "RateLimiting:UnlockPerIpPerSecretPerMinute", "RateLimiting:UnlockPerIpPerMinute");
@@ -86,6 +89,10 @@ builder.Services.AddRateLimiter(options =>
         RateLimiter.CreateChained(
             new FixedWindowRateLimiter(new FixedWindowRateLimiterOptions { PermitLimit = createPerHour, Window = TimeSpan.FromHours(1), QueueLimit = 0 }),
             new FixedWindowRateLimiter(new FixedWindowRateLimiterOptions { PermitLimit = createPerDay, Window = TimeSpan.FromDays(1), QueueLimit = 0 }))));
+    options.AddPolicy("create-challenge", context => RateLimitPartition.Get(PrivacyAudit.ClientAddress(context), _ =>
+        RateLimiter.CreateChained(
+            new FixedWindowRateLimiter(new FixedWindowRateLimiterOptions { PermitLimit = (int)Math.Min(int.MaxValue, challengePerHour), Window = TimeSpan.FromHours(1), QueueLimit = 0 }),
+            new FixedWindowRateLimiter(new FixedWindowRateLimiterOptions { PermitLimit = (int)Math.Min(int.MaxValue, challengePerDay), Window = TimeSpan.FromDays(1), QueueLimit = 0 }))));
     options.AddPolicy("open", context => RateLimitPartition.GetFixedWindowLimiter(
         PrivacyAudit.ClientAddress(context),
         _ => new FixedWindowRateLimiterOptions { PermitLimit = openPerMinute, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
@@ -105,6 +112,7 @@ builder.Services.AddRateLimiter(options =>
 });
 
 var app = builder.Build();
+ProductionConfiguration.Validate(app.Configuration, app.Environment.IsProduction());
 app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
 {
     PrivacyAudit.Log(context, "unhandled_error");
@@ -187,13 +195,14 @@ app.MapGet("/health/ready", async (IStorageReadiness health, HttpContext context
         ? Results.Ok(new HealthResponse("ready"))
         : Results.Json(new ErrorResponse("not_ready"), PrivacyLinkJsonContext.Default.ErrorResponse, statusCode: StatusCodes.Status503ServiceUnavailable));
 app.MapGet("/api/v1/capabilities", (IConfiguration configuration) => SecretEndpoints.Capabilities(configuration));
+app.MapGet("/api/v1/secrets/create-challenge", (CreateProofOfWork proof) => SecretEndpoints.CreateChallenge(proof)).RequireRateLimiting("create-challenge");
 app.MapGet("/api/v1/stats", () => Results.Json(new ErrorResponse("statistics_retired"), PrivacyLinkJsonContext.Default.ErrorResponse, statusCode: StatusCodes.Status410Gone));
 var adminApi = app.MapGroup("/api/v1/admin");
 adminApi.MapPost("/login", (Delegate)AdminEndpoints.Login).RequireRateLimiting("admin-login");
 adminApi.MapGet("/session", (Delegate)AdminEndpoints.Session).RequireAuthorization();
 adminApi.MapPost("/logout", (Delegate)AdminEndpoints.Logout).RequireAuthorization();
 adminApi.MapGet("/audit", (Delegate)AdminEndpoints.Audit).RequireAuthorization();
-app.MapPost("/api/v1/secrets", (HttpRequest request, HttpContext context, SecretApplicationService service, IConfiguration configuration) => SecretEndpoints.Create(request, context, service, configuration)).RequireRateLimiting("create");
+app.MapPost("/api/v1/secrets", (HttpRequest request, HttpContext context, SecretApplicationService service, IConfiguration configuration, CreateProofOfWork proof) => SecretEndpoints.Create(request, context, service, configuration, proof)).RequireRateLimiting("create");
 app.MapGet("/api/v1/secrets/{id}", (string id, SecretApplicationService service, TimeProvider clock) => SecretEndpoints.Metadata(id, service, clock));
 app.MapPost("/api/v1/secrets/{id}/revoke", (string id, HttpRequest request, SecretApplicationService service, ILoggerFactory loggerFactory) => SecretEndpoints.Revoke(id, request, service, loggerFactory)).RequireRateLimiting("revoke");
 app.MapPost("/api/v1/secrets/{id}/open", (string id, HttpRequest request, SecretApplicationService service, TimeProvider clock) => SecretEndpoints.Open(id, request, service, clock)).RequireRateLimiting("open");
@@ -219,6 +228,7 @@ static int BoundedLimit(IConfiguration configuration, string key, int fallback, 
 [JsonSerializable(typeof(HealthResponse))]
 [JsonSerializable(typeof(FileUploadPolicyResponse))]
 [JsonSerializable(typeof(CreateSecretResponse))]
+[JsonSerializable(typeof(CreateChallengeResponse))]
 [JsonSerializable(typeof(SecretMetadataResponse))]
 [JsonSerializable(typeof(OpenSecretResponse))]
 [JsonSerializable(typeof(OpenFileResponse))]

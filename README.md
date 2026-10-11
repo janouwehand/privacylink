@@ -60,10 +60,14 @@ Run these commands from the repository root:
 
 ```powershell
 dotnet restore PrivacyLink.slnx
+$env:ASPNETCORE_ENVIRONMENT = "Development"
+$createProofKey = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+dotnet user-secrets set "Security:CreateProofHmacKey" $createProofKey --project src/PrivacyLink.Api/PrivacyLink.Api.csproj
+dotnet user-secrets set "Security:CreateProofDifficultyBits" "17" --project src/PrivacyLink.Api/PrivacyLink.Api.csproj
 dotnet run --project src/PrivacyLink.Api --urls http://localhost:5080
 ```
 
-The Development environment is recommended for local work (`$env:ASPNETCORE_ENVIRONMENT="Development"`); the API uses in-memory storage and the local development pepper by default in that environment. In production, the API requires a PostgreSQL connection string, an absolute blob root, `Security:PasswordPepper` from Environment configuration, `Security:AuditHashKey`, `Security:RequirePasswordPepper=true`, an explicit `Security:RequireHttps` value, and explicit `AllowedHosts`. Configure `Security:TrustedProxies` with the proxy's exact IP address when TLS terminates at a proxy. Do not trust `X-Forwarded-*` headers without an explicit proxy IP.
+The Development environment uses in-memory secret and audit storage and the local development pepper; create proofs fail closed with HTTP 503 unless PostgreSQL is configured because replay protection needs durable shared storage. Use an independent random key for each environment and do not commit it. Difficulty 17 is a provisional baseline, not a phone-calibrated production setting. In production, the API requires a PostgreSQL connection string, an absolute blob root, `Security:PasswordPepper` from Environment configuration, `Security:AuditHashKey`, `Security:CreateProofHmacKey`, `Security:RequirePasswordPepper=true`, an explicit `Security:RequireHttps` value, and explicit `AllowedHosts`. Configure `Security:TrustedProxies` with the proxy's exact IP address when TLS terminates at a proxy. Do not trust `X-Forwarded-*` headers without an explicit proxy IP.
 
 Application privacy audit records include the operation, status, trace ID, and duration. When a valid `Security:AuditHashKey` is configured (required in production), the record also includes a truncated HMAC-SHA-256 of the client IP; without a valid key, the client field is `unavailable`. The application does not log request bodies, passwords, keys, or secret IDs. Product statistics collection has been retired; `/stats` reports that statistics are temporarily unavailable and `/api/v1/stats` returns HTTP 410. The application uses client IPs for in-memory rate limiting as well. This does not describe logs produced by the hosting platform, proxy, or infrastructure. Default limits for request body size, files, Argon2, and rate limiting are security limits and should only be changed deliberately.
 

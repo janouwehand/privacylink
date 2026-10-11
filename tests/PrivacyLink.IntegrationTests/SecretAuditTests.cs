@@ -12,7 +12,7 @@ public sealed class SecretAuditTests
     public async Task CreateUsesPreGeneratedSecretIdAndCompletesItsAudit()
     {
         var audit = new CapturingAuditWriter();
-        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        await using var factory = new TestApiFactory().WithWebHostBuilder(builder =>
             builder.ConfigureTestServices(services =>
             {
                 services.RemoveAll<ISecretRequestAuditWriter>();
@@ -21,7 +21,7 @@ public sealed class SecretAuditTests
         using var client = factory.CreateClient();
         var payload = new { protocolVersion = 1, expiry = "1d", message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" }, files = Array.Empty<object>() };
 
-        using var response = await client.PostAsJsonAsync("/api/v1/secrets", payload);
+        using var response = await CreateProofTestHelper.CreateAsync(client, payload);
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var created = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
         Assert.Single(audit.Starts);
@@ -36,7 +36,7 @@ public sealed class SecretAuditTests
     public async Task OriginRejectionIsAuditedBeforeTheEndpointRuns()
     {
         var audit = new CapturingAuditWriter();
-        await using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        await using var factory = new TestApiFactory().WithWebHostBuilder(builder =>
             builder.ConfigureTestServices(services =>
             {
                 services.RemoveAll<ISecretRequestAuditWriter>();
