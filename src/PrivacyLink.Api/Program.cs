@@ -41,6 +41,7 @@ builder.Services.AddSingleton(sp => new PasswordEnvelopeService(new PasswordEnve
     BoundedLimit(builder.Configuration, "Security:Argon2:MaxQueuedUnlocks", 8, 0, 64),
     BoundedLimit(builder.Configuration, "Security:Argon2:UnlockQueueTimeoutSeconds", 30, 1, 120))));
 builder.Services.AddSingleton<SecretApplicationService>();
+builder.Services.AddTransient<SecretRequestAuditMiddleware>();
 builder.Services.AddPrivacyLinkInfrastructure(builder.Configuration);
 builder.Services.AddRateLimiter(options =>
 {
@@ -87,10 +88,15 @@ var app = builder.Build();
 app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
 {
     PrivacyAudit.Log(context, "unhandled_error");
-    context.Response.StatusCode = StatusCodes.Status500InternalServerError;
-    await context.Response.WriteAsJsonAsync(new ErrorResponse("server_error"), PrivacyLinkJsonContext.Default.ErrorResponse);
+    var error = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error ?? new InvalidOperationException();
+    var failure = PrivacyAudit.Failure(error);
+    if (error is SecretAuditUnavailableException)
+        context.Items[PrivacyAudit.ErrorCodeItem] = failure.ErrorCode;
+    context.Response.StatusCode = failure.StatusCode;
+    await context.Response.WriteAsJsonAsync(new ErrorResponse(failure.ErrorCode), PrivacyLinkJsonContext.Default.ErrorResponse);
 }));
 app.UseForwardedHeaders();
+app.UseMiddleware<SecretRequestAuditMiddleware>();
 app.Use(async (context, next) =>
 {
     var requireHttps = builder.Environment.IsProduction() && (!bool.TryParse(builder.Configuration["Security:RequireHttps"], out var configuredRequireHttps) || configuredRequireHttps);
@@ -160,9 +166,9 @@ app.MapGet("/health/ready", async (IStorageReadiness health, HttpContext context
         : Results.Json(new ErrorResponse("not_ready"), PrivacyLinkJsonContext.Default.ErrorResponse, statusCode: StatusCodes.Status503ServiceUnavailable));
 app.MapGet("/api/v1/capabilities", (IConfiguration configuration) => SecretEndpoints.Capabilities(configuration));
 app.MapGet("/api/v1/stats", () => Results.Json(new ErrorResponse("statistics_retired"), PrivacyLinkJsonContext.Default.ErrorResponse, statusCode: StatusCodes.Status410Gone));
-app.MapPost("/api/v1/secrets", (HttpRequest request, SecretApplicationService service, IConfiguration configuration) => SecretEndpoints.Create(request, service, configuration)).RequireRateLimiting("create");
+app.MapPost("/api/v1/secrets", (HttpRequest request, HttpContext context, SecretApplicationService service, IConfiguration configuration) => SecretEndpoints.Create(request, context, service, configuration)).RequireRateLimiting("create");
 app.MapGet("/api/v1/secrets/{id}", (string id, SecretApplicationService service, TimeProvider clock) => SecretEndpoints.Metadata(id, service, clock));
-app.MapPost("/api/v1/secrets/{id}/revoke", (string id, HttpRequest request, SecretApplicationService service) => SecretEndpoints.Revoke(id, request, service)).RequireRateLimiting("revoke");
+app.MapPost("/api/v1/secrets/{id}/revoke", (string id, HttpRequest request, SecretApplicationService service, ILoggerFactory loggerFactory) => SecretEndpoints.Revoke(id, request, service, loggerFactory)).RequireRateLimiting("revoke");
 app.MapPost("/api/v1/secrets/{id}/open", (string id, HttpRequest request, SecretApplicationService service, TimeProvider clock) => SecretEndpoints.Open(id, request, service, clock)).RequireRateLimiting("open");
 app.MapPost("/api/v1/secrets/{id}/unlock", (string id, HttpRequest request, SecretApplicationService service, TimeProvider clock, IConfiguration configuration) => SecretEndpoints.Unlock(id, request, service, clock, configuration)).RequireRateLimiting("unlock");
 app.MapPost("/api/v1/secrets/{id}/files/{fileId}/open", (string id, string fileId, HttpRequest request, SecretApplicationService service, TimeProvider clock) => SecretEndpoints.OpenFile(id, fileId, request, service, clock)).RequireRateLimiting("open");

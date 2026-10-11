@@ -17,7 +17,7 @@ internal static class SecretEndpoints
         return Results.Json(new FileUploadPolicyResponse(maxFiles, maxFileBytes, AllowedExtensions(configuration).OrderBy(extension => extension, StringComparer.Ordinal).ToArray()), PrivacyLinkJsonContext.Default.FileUploadPolicyResponse);
     }
 
-    public static async Task<IResult> Create(HttpRequest request, SecretApplicationService service, IConfiguration configuration)
+    public static async Task<IResult> Create(HttpRequest request, HttpContext context, SecretApplicationService service, IConfiguration configuration)
     {
         var cancellationToken = request.HttpContext.RequestAborted;
         var maxMessage = Limit(configuration, "Limits:MaxMessagePlaintextBytes", 80000);
@@ -78,7 +78,9 @@ internal static class SecretEndpoints
             if (message is null && parsedFiles.Count == 0) return Error(400, "invalid_request");
 
             cancellationToken.ThrowIfCancellationRequested();
-            var created = await service.CreateAsync(new CreateSecretCommand(expiry.GetString()!, message, parsedFiles, password), cancellationToken);
+            var preGeneratedId = context.Items.TryGetValue(PrivacyAudit.CreateSecretIdItem, out var value) ? value as string : null;
+            var auditRequestId = context.Items.TryGetValue(PrivacyAudit.RequestIdItem, out var requestId) && requestId is Guid id ? id : (Guid?)null;
+            var created = await service.CreateAsync(new CreateSecretCommand(expiry.GetString()!, message, parsedFiles, password, preGeneratedId, auditRequestId), cancellationToken);
             if (created is null) return Error(429, "rate_limited");
             return Results.Json(new CreateSecretResponse(created.Id, created.ExpiresAt, created.PasswordProtected, created.RevokeToken), PrivacyLinkJsonContext.Default.CreateSecretResponse, statusCode: 201);
         }
@@ -91,6 +93,7 @@ internal static class SecretEndpoints
             return Error(503, "temporarily_unavailable");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { return Results.Empty; }
+        catch (SecretAuditUnavailableException) { throw; }
         catch { return Error(500, "server_error"); }
     }
 
@@ -103,7 +106,7 @@ internal static class SecretEndpoints
         return Results.Json(new SecretMetadataResponse(true, 1, secret.ExpiresAt, secret.PasswordProtected, secret.MessageNonce is not null, secret.Files.Count, metadata), PrivacyLinkJsonContext.Default.SecretMetadataResponse);
     }
 
-    public static async Task<IResult> Revoke(string id, HttpRequest request, SecretApplicationService service)
+    public static async Task<IResult> Revoke(string id, HttpRequest request, SecretApplicationService service, ILoggerFactory loggerFactory)
     {
         if (!request.HasJsonContentType() || request.ContentLength is > 4096 || request.ContentLength is 0)
             return Error(400, "invalid_request");
@@ -118,7 +121,12 @@ internal static class SecretEndpoints
                 return Error(400, "invalid_request");
 
             var revokeTokenHash = Encode(SHA256.HashData(revokeToken));
-            return await service.RevokeAsync(id, revokeTokenHash) ? Results.NoContent() : Error(404, "not_found");
+            var auditRequestId = request.HttpContext.Items.TryGetValue(PrivacyAudit.RequestIdItem, out var requestId) && requestId is Guid idValue ? idValue : (Guid?)null;
+            var logger = loggerFactory.CreateLogger("SecretRevocation");
+            return await service.RevokeAsync(id, revokeTokenHash, auditRequestId, request.HttpContext.RequestAborted,
+                exception => logger.LogError(exception, "Blob cleanup failed after secret revocation for {SecretId}", id))
+                ? Results.NoContent()
+                : Error(404, "not_found");
         }
         catch (JsonException) { return Error(400, "invalid_request"); }
     }
@@ -160,7 +168,8 @@ internal static class SecretEndpoints
             if (root.ValueKind != JsonValueKind.Object || !Only(root, "password") || !root.TryGetProperty("password", out var password) || password.ValueKind != JsonValueKind.String || password.GetString() is not { } value)
                 return Error(400, "invalid_request");
 
-            var result = await service.UnlockAsync(secret, value, maxAttempts, attemptWindow, cooldown, cancellationToken);
+            var auditRequestId = request.HttpContext.Items.TryGetValue(PrivacyAudit.RequestIdItem, out var requestId) && requestId is Guid idValue ? idValue : (Guid?)null;
+            var result = await service.UnlockAsync(secret, value, maxAttempts, attemptWindow, cooldown, auditRequestId, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             MessageCiphertext? message = result.MessageNonce is not null && result.MessageCiphertext is not null
                 ? new MessageCiphertext(result.MessageNonce, Encode(result.MessageCiphertext))

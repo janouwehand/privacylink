@@ -1,10 +1,17 @@
 using System.Text;
 using System.Security.Cryptography;
+using System.Net;
+using Microsoft.AspNetCore.Http;
+using PrivacyLink.Services;
 
 namespace PrivacyLink.Api;
 
 internal static class PrivacyAudit
 {
+    internal const string RequestIdItem = "PrivacyLink.SecretRequestId";
+    internal const string CreateSecretIdItem = "PrivacyLink.CreateSecretId";
+    internal const string ErrorCodeItem = "PrivacyLink.SecretRequestErrorCode";
+
     public static bool IsAudited(HttpRequest request) =>
         request.Path.StartsWithSegments("/api/v1/secrets") &&
         (HttpMethods.IsPost(request.Method) || HttpMethods.IsGet(request.Method));
@@ -20,6 +27,45 @@ internal static class PrivacyAudit
     }
 
     public static string ClientAddress(HttpContext context) => context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+    public static string NewSecretId() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(16)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    public static bool IsCanonicalSecretId(string value)
+    {
+        if (value.Length != 22 || value.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not '-' and not '_')) return false;
+        try
+        {
+            var bytes = Convert.FromBase64String(value.Replace('-', '+').Replace('_', '/') + "==");
+            return bytes.Length == 16 && NewEncoding(bytes) == value;
+        }
+        catch (FormatException) { return false; }
+    }
+
+    public static (int StatusCode, string ErrorCode) Failure(Exception exception) => exception switch
+    {
+        SecretAuditUnavailableException => (StatusCodes.Status503ServiceUnavailable, "audit_unavailable"),
+        BadHttpRequestException badRequest => (badRequest.StatusCode, badRequest.StatusCode switch
+        {
+            StatusCodes.Status400BadRequest => "invalid_request",
+            StatusCodes.Status413PayloadTooLarge => "payload_too_large",
+            StatusCodes.Status414RequestUriTooLong => "request_uri_too_long",
+            StatusCodes.Status415UnsupportedMediaType => "unsupported_media_type",
+            StatusCodes.Status431RequestHeaderFieldsTooLarge => "request_headers_too_large",
+            _ => "server_error"
+        }),
+        _ => (StatusCodes.Status500InternalServerError, "server_error")
+    };
+
+    public static string? AuditErrorCode(int statusCode, string? mappedCode) =>
+        statusCode < 400 ? null : mappedCode ?? $"http_{statusCode}";
+
+    private static string NewEncoding(byte[] value) => Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    public static IPAddress? NormalizedClientIp(HttpContext context)
+    {
+        var address = context.Connection.RemoteIpAddress;
+        return address?.IsIPv4MappedToIPv6 == true ? address.MapToIPv4() : address;
+    }
 
     public static void Log(HttpContext context, string operation, TimeSpan? duration = null)
     {

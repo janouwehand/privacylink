@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <IsAotCompatible>true</IsAotCompatible>
     <EnableRequestDelegateGenerator>true</EnableRequestDelegateGenerator>
+    <UserSecretsId>10c34185-d711-49e4-916e-59ed06f008fe</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
