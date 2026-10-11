@@ -1,4 +1,4 @@
-using PrivacyLink.Api;
+using PrivacyLink.Services;
 
 public sealed class Argon2ConcurrencyGateTests
 {

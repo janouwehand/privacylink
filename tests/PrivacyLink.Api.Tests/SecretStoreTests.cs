@@ -2,6 +2,8 @@ using System.Security.Cryptography;
 using Microsoft.Extensions.Configuration;
 using PrivacyLink.Api;
 using PrivacyLink.Contracts;
+using PrivacyLink.Infrastructure;
+using PrivacyLink.Services;
 
 public sealed class SecretStoreTests
 {
@@ -98,7 +100,11 @@ public sealed class SecretStoreTests
             ["Security:Argon2:Iterations"] = "1",
             ["Security:Argon2:DegreeOfParallelism"] = "1"
         }).Build();
-        var service = new PasswordEnvelopeService(configuration);
+        var service = new PasswordEnvelopeService(new PasswordEnvelopeOptions(
+            Pepper: configuration["Security:PasswordPepper"],
+            MemorySizeKb: 8192,
+            Iterations: 1,
+            DegreeOfParallelism: 1));
         var plaintext = new byte[] { 1, 2, 3, 4 };
         var envelope = await service.EncryptAsync("correct horse", plaintext);
 

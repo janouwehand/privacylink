@@ -1,4 +1,4 @@
-namespace PrivacyLink.Api;
+namespace PrivacyLink.Infrastructure;
 
 internal sealed record BlobReference(string SecretId, string BlobId);
 

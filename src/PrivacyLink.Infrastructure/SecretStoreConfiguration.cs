@@ -1,9 +1,9 @@
 using Microsoft.Extensions.Configuration;
 using Npgsql;
 
-namespace PrivacyLink.Api;
+namespace PrivacyLink.Infrastructure;
 
-internal static class SecretStoreConfiguration
+public static class SecretStoreConfiguration
 {
     private const string SupportedProvider = "Environment";
 

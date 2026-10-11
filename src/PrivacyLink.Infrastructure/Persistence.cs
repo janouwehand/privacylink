@@ -1,28 +1,29 @@
 using System.Data;
 using System.Security.Cryptography;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Npgsql;
-using PrivacyLink.Contracts;
+using PrivacyLink.Services;
 
-namespace PrivacyLink.Api;
+namespace PrivacyLink.Infrastructure;
 
-internal sealed record StoredFile(string Id, string Extension, string NameNonce, string NameCiphertext, string MimeType, long Size, string Nonce, string BlobId, string? OuterNonce = null);
-internal sealed record StoredSecret(string Id, DateTimeOffset ExpiresAt, string? MessageNonce, string? MessageBlobId, long Size, IReadOnlyList<StoredFile> Files, string? PasswordSalt = null, string? MessageOuterNonce = null, string? RevokeTokenHash = null)
-{
-    public bool PasswordProtected => PasswordSalt is not null;
-}
-
-internal sealed record UnlockAttemptAdmission(bool SecretExists, bool Allowed, DateTimeOffset? RetryAt = null);
-internal sealed class UnlockAttemptLimitException(DateTimeOffset retryAt) : Exception { public DateTimeOffset RetryAt { get; } = retryAt; }
-
-internal interface IBlobStorage
+internal interface IInfrastructureHealthCheck
 {
     Task CheckHealthAsync(CancellationToken cancellationToken = default);
-    Task PutAsync(string secretId, string blobId, ReadOnlyMemory<byte> contents, CancellationToken cancellationToken = default);
-    Task<byte[]> ReadAsync(string secretId, string blobId, CancellationToken cancellationToken = default);
-    Task DeleteAsync(string secretId, string blobId, CancellationToken cancellationToken = default);
 }
 
-internal sealed class FileBlobStorage(IConfiguration configuration) : IBlobStorage
+internal interface IInfrastructureInitializer
+{
+    Task<bool> InitializeAsync(CancellationToken cancellationToken = default);
+}
+
+public interface IStorageReadiness
+{
+    Task<bool> CheckReadinessAsync(CancellationToken requestCancellation);
+}
+
+internal sealed class FileBlobStorage(IConfiguration configuration) : IBlobStorage, IInfrastructureHealthCheck, IInfrastructureInitializer
 {
     private readonly string _root = Path.GetFullPath(configuration["Storage:BlobPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "blobs"));
 
@@ -40,6 +41,12 @@ internal sealed class FileBlobStorage(IConfiguration configuration) : IBlobStora
         {
             if (File.Exists(probePath)) File.Delete(probePath);
         }
+    }
+
+    public async Task<bool> InitializeAsync(CancellationToken cancellationToken = default)
+    {
+        await CleanupTemporaryFilesAsync(cancellationToken);
+        return true;
     }
 
     internal Task CleanupTemporaryFilesAsync(CancellationToken cancellationToken = default)
@@ -93,7 +100,7 @@ internal sealed class FileBlobStorage(IConfiguration configuration) : IBlobStora
     }
 }
 
-internal sealed class InMemoryBlobStorage : IBlobStorage
+internal sealed class InMemoryBlobStorage : IBlobStorage, IInfrastructureHealthCheck
 {
     private readonly Dictionary<(string SecretId, string BlobId), byte[]> _blobs = new();
     private readonly object _gate = new();
@@ -122,20 +129,7 @@ internal sealed class InMemoryBlobStorage : IBlobStorage
     }
 }
 
-internal interface ISecretRepository
-{
-    Task CheckHealthAsync(CancellationToken cancellationToken = default);
-    Task<bool> InitializeAsync(CancellationToken cancellationToken = default);
-    Task<StoredSecret?> CreateAsync(StoredSecret secret, CancellationToken cancellationToken = default);
-    Task<StoredSecret?> GetAsync(string id, DateTimeOffset now, CancellationToken cancellationToken = default);
-    Task<StoredSecret?> GetForRevocationAsync(string id, string revokeTokenHash, CancellationToken cancellationToken = default);
-    Task<UnlockAttemptAdmission> ReserveUnlockAttemptAsync(string id, DateTimeOffset now, int maxAttempts, TimeSpan window, TimeSpan cooldown, CancellationToken cancellationToken = default);
-    Task ResetUnlockAttemptsAsync(string id, CancellationToken cancellationToken = default);
-    Task<IReadOnlyList<StoredSecret>> GetExpiredAsync(DateTimeOffset now, int batchSize, CancellationToken cancellationToken = default);
-    Task DeleteAsync(string id, CancellationToken cancellationToken = default);
-}
-
-internal sealed class InMemorySecretRepository : ISecretRepository
+internal sealed class InMemorySecretRepository : ISecretRepository, IInfrastructureHealthCheck, IInfrastructureInitializer
 {
     private readonly Dictionary<string, StoredSecret> _secrets = new(StringComparer.Ordinal);
     private readonly Dictionary<string, UnlockAttemptState> _unlockAttempts = new(StringComparer.Ordinal);
@@ -234,7 +228,7 @@ internal sealed class InMemorySecretRepository : ISecretRepository
     }
 }
 
-internal sealed class PostgresSecretRepository(IConfiguration configuration) : ISecretRepository
+internal sealed class PostgresSecretRepository(IConfiguration configuration) : ISecretRepository, IInfrastructureHealthCheck, IInfrastructureInitializer
 {
     private readonly string _connectionString = configuration.GetConnectionString("PrivacyLink") ?? throw new InvalidOperationException("ConnectionStrings:PrivacyLink is required.");
     private readonly int _maxActive = int.TryParse(configuration["Storage:MaxActiveSecrets"], out var active) && active > 0 ? active : 10000;
@@ -360,7 +354,7 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
         command.Parameters.AddWithValue((object?)secret.PasswordSalt ?? DBNull.Value);
         command.Parameters.AddWithValue((object?)secret.MessageOuterNonce ?? DBNull.Value);
         command.Parameters.AddWithValue(secret.Size);
-        command.Parameters.AddWithValue(System.Text.Json.JsonSerializer.Serialize(secret.Files, PrivacyLinkJsonContext.Default.IReadOnlyListStoredFile));
+        command.Parameters.AddWithValue(System.Text.Json.JsonSerializer.Serialize(secret.Files, InfrastructureJsonContext.Default.IReadOnlyListStoredFile));
         command.Parameters.AddWithValue((object?)secret.RevokeTokenHash ?? DBNull.Value);
         var created = await command.ExecuteNonQueryAsync(cancellationToken) == 1;
         await transaction.CommitAsync(cancellationToken);
@@ -474,18 +468,18 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
         reader.IsDBNull(3) ? null : reader.GetString(3),
         reader.IsDBNull(4) ? null : reader.GetString(4),
         reader.GetInt64(7),
-        System.Text.Json.JsonSerializer.Deserialize(reader.GetString(8), PrivacyLinkJsonContext.Default.ListStoredFile) ?? [],
+        System.Text.Json.JsonSerializer.Deserialize(reader.GetString(8), InfrastructureJsonContext.Default.ListStoredFile) ?? [],
         reader.IsDBNull(5) ? null : reader.GetString(5),
         reader.IsDBNull(6) ? null : reader.GetString(6));
 }
 
-internal sealed class StorageHealth
+internal sealed class StorageHealth(IEnumerable<IInfrastructureHealthCheck> healthChecks) : IStorageReadiness
 {
     private volatile bool _ready;
     public bool IsReady => _ready;
     public void MarkReady() => _ready = true;
 
-    public async Task<bool> CheckReadinessAsync(ISecretRepository repository, IBlobStorage blobs, CancellationToken requestCancellation)
+    public async Task<bool> CheckReadinessAsync(CancellationToken requestCancellation)
     {
         if (!IsReady) return false;
 
@@ -493,7 +487,7 @@ internal sealed class StorageHealth
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(requestCancellation, timeout.Token);
         try
         {
-            await Task.WhenAll(repository.CheckHealthAsync(linked.Token), blobs.CheckHealthAsync(linked.Token));
+            await Task.WhenAll(healthChecks.Select(check => check.CheckHealthAsync(linked.Token)));
             return true;
         }
         catch (OperationCanceledException) when (requestCancellation.IsCancellationRequested)
@@ -507,14 +501,14 @@ internal sealed class StorageHealth
     }
 }
 
-internal sealed class StorageInitializer(ISecretRepository repository, IBlobStorage blobs, StorageHealth health, ILogger<StorageInitializer> logger) : IHostedService
+internal sealed class StorageInitializer(IEnumerable<IInfrastructureInitializer> initializers, StorageHealth health, ILogger<StorageInitializer> logger) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         try
         {
-            await repository.InitializeAsync(cancellationToken);
-            if (blobs is FileBlobStorage fileBlobs) await fileBlobs.CleanupTemporaryFilesAsync(cancellationToken);
+            foreach (var initializer in initializers)
+                await initializer.InitializeAsync(cancellationToken);
             health.MarkReady();
         }
         catch (Exception ex) { logger.LogError(ex, "Persistent storage initialization failed"); throw; }

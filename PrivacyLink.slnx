@@ -2,6 +2,8 @@
   <Folder Name="/src/">
     <Project Path="src/PrivacyLink.Api/PrivacyLink.Api.csproj" />
     <Project Path="src/PrivacyLink.Contracts/PrivacyLink.Contracts.csproj" />
+    <Project Path="src/PrivacyLink.Services/PrivacyLink.Services.csproj" />
+    <Project Path="src/PrivacyLink.Infrastructure/PrivacyLink.Infrastructure.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/PrivacyLink.Api.Tests/PrivacyLink.Api.Tests.csproj" />

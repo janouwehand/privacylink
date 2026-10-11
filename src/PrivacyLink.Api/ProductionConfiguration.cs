@@ -1,3 +1,5 @@
+using PrivacyLink.Infrastructure;
+
 namespace PrivacyLink.Api;
 
 internal static class ProductionConfiguration
