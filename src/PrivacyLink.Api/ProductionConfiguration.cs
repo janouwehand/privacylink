@@ -34,5 +34,9 @@ internal static class ProductionConfiguration
             if (!System.Net.IPAddress.TryParse(proxy.Value, out _))
                 throw new InvalidOperationException("Security:TrustedProxies contains an invalid IP address.");
         }
+
+        var adminPassword = configuration["Security:AdminPassword"];
+        if (string.IsNullOrWhiteSpace(adminPassword) || adminPassword.Length < 16)
+            throw new InvalidOperationException("Security:AdminPassword must be supplied as a secret of at least 16 characters in production.");
     }
 }

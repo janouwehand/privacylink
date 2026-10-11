@@ -27,6 +27,26 @@ public sealed record StoredSecret(
 
 public sealed record UnlockAttemptAdmission(bool SecretExists, bool Allowed, DateTimeOffset? RetryAt = null);
 
+public sealed record SecretRequestAuditStart(Guid RequestId, string TraceId, string SecretId, string SecretIdSource, string? RequestedSecretId, string Action, string HttpMethod, string RouteTemplate, DateTimeOffset StartedAt, System.Net.IPAddress? ClientIp, string? FileId);
+public sealed record SecretRequestAuditFinish(DateTimeOffset CompletedAt, long DurationMs, string State, string? Outcome, int? HttpStatus, string? ErrorCode);
+public sealed record SecretRequestAuditRecord(long Id, Guid RequestId, string TraceId, string SecretId, string SecretIdSource, string? RequestedSecretId, string Action, string HttpMethod, string RouteTemplate, DateTimeOffset StartedAt, DateTimeOffset? CompletedAt, long? DurationMs, string State, string? Outcome, int? HttpStatus, string? ErrorCode, System.Net.IPAddress? ClientIp, string? FileId);
+
+public sealed class SecretAuditUnavailableException : Exception
+{
+    public SecretAuditUnavailableException(Exception? inner = null) : base("Secret request audit storage is unavailable.", inner) { }
+}
+
+public interface ISecretRequestAuditWriter
+{
+    Task StartAsync(SecretRequestAuditStart audit, CancellationToken cancellationToken = default);
+    Task FinishAsync(Guid requestId, SecretRequestAuditFinish finish, CancellationToken cancellationToken = default);
+}
+
+public interface ISecretRequestAuditReader
+{
+    Task<IReadOnlyList<SecretRequestAuditRecord>> ListAsync(long? beforeId, int pageSize, CancellationToken cancellationToken = default);
+}
+
 public sealed class UnlockAttemptLimitException(DateTimeOffset retryAt) : Exception
 {
     public DateTimeOffset RetryAt { get; } = retryAt;
@@ -41,11 +61,12 @@ public interface IBlobStorage
 
 public interface ISecretRepository
 {
-    Task<StoredSecret?> CreateAsync(StoredSecret secret, CancellationToken cancellationToken = default);
+    Task<StoredSecret?> CreateAsync(StoredSecret secret, Guid? auditRequestId = null, CancellationToken cancellationToken = default);
     Task<StoredSecret?> GetAsync(string id, DateTimeOffset now, CancellationToken cancellationToken = default);
     Task<StoredSecret?> GetForRevocationAsync(string id, string revokeTokenHash, CancellationToken cancellationToken = default);
     Task<UnlockAttemptAdmission> ReserveUnlockAttemptAsync(string id, DateTimeOffset now, int maxAttempts, TimeSpan window, TimeSpan cooldown, CancellationToken cancellationToken = default);
-    Task ResetUnlockAttemptsAsync(string id, CancellationToken cancellationToken = default);
+    Task ResetUnlockAttemptsAsync(string id, Guid? auditRequestId = null, CancellationToken cancellationToken = default);
+    Task<StoredSecret?> RevokeAsync(string id, string revokeTokenHash, Guid? auditRequestId = null, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<StoredSecret>> GetExpiredAsync(DateTimeOffset now, int batchSize, CancellationToken cancellationToken = default);
     Task DeleteAsync(string id, CancellationToken cancellationToken = default);
 }

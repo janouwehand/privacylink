@@ -12,6 +12,7 @@ services:
       ConnectionStrings__PrivacyLinkPassword_FILE: /run/secrets/postgres_password
       Security__PasswordPepper_FILE: /run/secrets/password_pepper
       Security__AuditHashKey_FILE: /run/secrets/audit_hash_key
+      Security__AdminPassword_FILE: /run/secrets/admin_password
       Security__SecretStore__Provider: Environment
       Security__RequireHttps: "${PRIVACYLINK_REQUIRE_HTTPS:-false}"
       Security__TrustedProxies__0: "${PRIVACYLINK_TRUSTED_PROXY_0:-}"
@@ -28,6 +29,7 @@ services:
       - postgres_password
       - password_pepper
       - audit_hash_key
+      - admin_password
     depends_on:
       postgres:
         condition: service_healthy
@@ -69,3 +71,5 @@ secrets:
     environment: PRIVACYLINK_PASSWORD_PEPPER
   audit_hash_key:
     environment: PRIVACYLINK_AUDIT_HASH_KEY
+  admin_password:
+    environment: PRIVACYLINK_ADMIN_PASSWORD

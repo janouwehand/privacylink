@@ -5,7 +5,7 @@ namespace PrivacyLink.Services;
 
 public sealed record SecretCreateMessage(string Nonce, byte[] Ciphertext);
 public sealed record SecretCreateFile(string Id, string Extension, string NameNonce, string NameCiphertext, string MimeType, long Size, string Nonce, byte[] Ciphertext);
-public sealed record CreateSecretCommand(string Expiry, SecretCreateMessage? Message, IReadOnlyList<SecretCreateFile> Files, string? Password);
+public sealed record CreateSecretCommand(string Expiry, SecretCreateMessage? Message, IReadOnlyList<SecretCreateFile> Files, string? Password, string? SecretId = null, Guid? AuditRequestId = null);
 public sealed record CreatedSecret(string Id, DateTimeOffset ExpiresAt, bool PasswordProtected, string RevokeToken);
 public sealed record SecretOpenData(string? MessageNonce, byte[]? MessageCiphertext);
 public sealed record OpenedFileData(StoredFile File, byte[] Ciphertext);
@@ -24,7 +24,7 @@ public sealed class SecretApplicationService(
 
     public async Task<CreatedSecret?> CreateAsync(CreateSecretCommand command, CancellationToken cancellationToken = default)
     {
-        var secretId = NewId();
+        var secretId = command.SecretId ?? NewId();
         var blobIds = new List<string>();
         var persisted = false;
         try
@@ -83,7 +83,7 @@ public sealed class SecretApplicationService(
                 messageOuterNonce,
                 revokeTokenHash);
             cancellationToken.ThrowIfCancellationRequested();
-            if (await repository.CreateAsync(secret) is null)
+            if (await repository.CreateAsync(secret, command.AuditRequestId, cancellationToken) is null)
             {
                 foreach (var blobId in blobIds) await blobs.DeleteAsync(secret.Id, blobId);
                 return null;
@@ -104,17 +104,26 @@ public sealed class SecretApplicationService(
         }
     }
 
-    public async Task<bool> RevokeAsync(string id, string revokeTokenHash, CancellationToken cancellationToken = default)
+    public async Task<bool> RevokeAsync(string id, string revokeTokenHash, Guid? auditRequestId = null, CancellationToken cancellationToken = default, Action<Exception>? blobDeleteFailure = null)
     {
-        var secret = await repository.GetForRevocationAsync(id, revokeTokenHash, cancellationToken);
+        var candidate = await repository.GetForRevocationAsync(id, revokeTokenHash, cancellationToken);
+        if (candidate is null) return false;
+        var secret = await repository.RevokeAsync(id, revokeTokenHash, auditRequestId, cancellationToken);
         if (secret is null) return false;
 
         var blobIds = secret.Files.Select(file => file.BlobId)
             .Append(secret.MessageBlobId)
             .OfType<string>()
             .Distinct(StringComparer.Ordinal);
-        foreach (var blobId in blobIds) await blobs.DeleteAsync(secret.Id, blobId, cancellationToken);
-        await repository.DeleteAsync(secret.Id, cancellationToken);
+        foreach (var blobId in blobIds)
+        {
+            try { await blobs.DeleteAsync(secret.Id, blobId, CancellationToken.None); }
+            catch (Exception ex)
+            {
+                try { blobDeleteFailure?.Invoke(ex); }
+                catch { }
+            }
+        }
         return true;
     }
 
@@ -144,6 +153,7 @@ public sealed class SecretApplicationService(
         int maxAttempts,
         TimeSpan attemptWindow,
         TimeSpan cooldown,
+        Guid? auditRequestId = null,
         CancellationToken cancellationToken = default)
     {
         if (secret.PasswordSalt is null) throw new SecretProtectedException();
@@ -181,7 +191,7 @@ public sealed class SecretApplicationService(
             files.Add(new OpenedFileData(file, inner));
         }
 
-        await repository.ResetUnlockAttemptsAsync(secret.Id, cancellationToken);
+        await repository.ResetUnlockAttemptsAsync(secret.Id, auditRequestId, cancellationToken);
         return new SecretUnlockData(secret.MessageNonce, messageCiphertext, files);
     }
 

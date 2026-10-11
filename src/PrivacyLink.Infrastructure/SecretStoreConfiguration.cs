@@ -18,6 +18,10 @@ public static class SecretStoreConfiguration
         if (!string.IsNullOrWhiteSpace(auditHashKeyPath))
             settings["Security:AuditHashKey"] = ReadSecretFile(auditHashKeyPath);
 
+        var adminPasswordPath = configuration["Security:AdminPassword_FILE"];
+        if (!string.IsNullOrWhiteSpace(adminPasswordPath))
+            settings["Security:AdminPassword"] = ReadSecretFile(adminPasswordPath);
+
         var databasePasswordPath = configuration["ConnectionStrings:PrivacyLinkPassword_FILE"];
         if (!string.IsNullOrWhiteSpace(databasePasswordPath))
         {

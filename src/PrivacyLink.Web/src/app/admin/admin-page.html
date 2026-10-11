@@ -1,0 +1,51 @@
+<section class="hero compact">
+  <div class="eyebrow">PrivacyLink</div>
+  <h1 id="page-title" tabindex="-1">{{ language.t('adminTitle') }}</h1>
+  <p>{{ language.t('adminIntro') }}</p>
+</section>
+
+@if (checkingSession()) {
+  <section class="card"><p role="status">{{ language.t('adminSessionCheck') }}</p></section>
+} @else if (!authenticated()) {
+  <form class="card admin-login" (submit)="login($event)">
+    <label for="admin-password">{{ language.t('adminPassword') }}</label>
+    <input id="admin-password" type="password" autocomplete="current-password" required [value]="password()" (input)="password.set($any($event.target).value)">
+    @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
+    <button class="primary" type="submit" [disabled]="busy() || !password()">{{ language.t(busy() ? 'adminLoggingIn' : 'adminLogin') }}</button>
+  </form>
+} @else {
+  <section class="card admin-audit">
+    <div class="admin-actions">
+      <button class="secondary" type="button" [disabled]="loading()" (click)="refresh()">{{ language.t(loading() ? 'adminLoading' : 'adminRefresh') }}</button>
+      <button class="secondary" type="button" (click)="logout()">{{ language.t('adminLogout') }}</button>
+    </div>
+    @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
+    @if (records().length === 0 && !loading()) {
+      <p>{{ language.t('adminEmpty') }}</p>
+    } @else {
+      <div class="history-table-wrap">
+        <table class="history-table admin-audit-table" [attr.aria-label]="language.t('adminTitle')">
+          <thead><tr>
+            <th>{{ language.t('adminTime') }}</th><th>{{ language.t('adminAction') }}</th><th>{{ language.t('adminSecret') }}</th>
+            <th>{{ language.t('adminClientIp') }}</th><th>{{ language.t('adminOutcome') }}</th><th>{{ language.t('adminStatus') }}</th><th>{{ language.t('adminRequest') }}</th>
+          </tr></thead>
+          <tbody>
+            @for (record of records(); track record.id) {
+              <tr>
+                <td [attr.data-label]="language.t('adminTime')">{{ record.startedAt | date:'medium':undefined:language.dateLocale() }}</td>
+                <td [attr.data-label]="language.t('adminAction')"><strong>{{ record.action }}</strong><br>{{ record.httpMethod }}</td>
+                <td [attr.data-label]="language.t('adminSecret')"><code>{{ record.secretId }}</code>@if (record.requestedSecretId) {<br><small>Requested: {{ record.requestedSecretId }}</small>}</td>
+                <td [attr.data-label]="language.t('adminClientIp')">{{ record.clientIp || language.t('adminNoIp') }}</td>
+                <td [attr.data-label]="language.t('adminOutcome')">{{ record.outcome || record.state }}@if (record.errorCode) {<br><small>{{ record.errorCode }}</small>}</td>
+                <td [attr.data-label]="language.t('adminStatus')">{{ record.httpStatus ?? '—' }}</td>
+                <td [attr.data-label]="language.t('adminRequest')"><code>{{ record.routeTemplate }}</code><br><small>{{ record.durationMs ?? '—' }} ms · {{ record.traceId }}</small></td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+    @if (loading()) { <p role="status">{{ language.t('adminLoading') }}</p> }
+    @if (nextBeforeId() !== null) { <button class="secondary admin-more" type="button" [disabled]="loading()" (click)="loadOlder()">{{ language.t('adminMore') }}</button> }
+  </section>
+}

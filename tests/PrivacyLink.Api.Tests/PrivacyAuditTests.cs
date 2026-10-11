@@ -38,6 +38,20 @@ public sealed class PrivacyAuditTests
         Assert.DoesNotContain(unkeyed, provider.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ClientIpNormalizesIpv4MappedIpv6AndCreateIdsAreCanonical()
+    {
+        var context = new DefaultHttpContext();
+        context.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("::ffff:203.0.113.4");
+
+        Assert.Equal("203.0.113.4", PrivacyAudit.NormalizedClientIp(context)?.ToString());
+        var id = PrivacyAudit.NewSecretId();
+        Assert.Equal(22, id.Length);
+        Assert.True(PrivacyAudit.IsCanonicalSecretId(id));
+        Assert.All(id, character => Assert.True(char.IsAsciiLetterOrDigit(character) || character is '-' or '_'));
+        Assert.False(PrivacyAudit.IsCanonicalSecretId("AAAAAAAAAAAAAAAAAAAAAB"));
+    }
+
     private sealed class CapturingProvider : ILoggerProvider
     {
         public string Message { get; private set; } = string.Empty;

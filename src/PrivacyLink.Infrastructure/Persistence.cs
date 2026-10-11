@@ -154,7 +154,7 @@ internal sealed class InMemorySecretRepository : ISecretRepository, IInfrastruct
         return Task.CompletedTask;
     }
 
-    public Task<StoredSecret?> CreateAsync(StoredSecret secret, CancellationToken cancellationToken = default)
+    public Task<StoredSecret?> CreateAsync(StoredSecret secret, Guid? auditRequestId = null, CancellationToken cancellationToken = default)
     {
         lock (_gate)
         {
@@ -205,11 +205,25 @@ internal sealed class InMemorySecretRepository : ISecretRepository, IInfrastruct
         }
     }
 
-    public Task ResetUnlockAttemptsAsync(string id, CancellationToken cancellationToken = default)
+    public Task ResetUnlockAttemptsAsync(string id, Guid? auditRequestId = null, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (_gate) _unlockAttempts.Remove(id);
         return Task.CompletedTask;
+    }
+
+    public Task<StoredSecret?> RevokeAsync(string id, string revokeTokenHash, Guid? auditRequestId = null, CancellationToken cancellationToken = default)
+    {
+        lock (_gate)
+        {
+            if (!_secrets.TryGetValue(id, out var secret) || secret.RevokeTokenHash is null ||
+                !CryptographicOperations.FixedTimeEquals(System.Text.Encoding.ASCII.GetBytes(secret.RevokeTokenHash), System.Text.Encoding.ASCII.GetBytes(revokeTokenHash)))
+                return Task.FromResult<StoredSecret?>(null);
+            _secrets.Remove(id);
+            _bytes -= secret.Size;
+            _unlockAttempts.Remove(id);
+            return Task.FromResult<StoredSecret?>(secret);
+        }
     }
 
     public Task<IReadOnlyList<StoredSecret>> GetExpiredAsync(DateTimeOffset now, int batchSize, CancellationToken cancellationToken = default)
@@ -311,6 +325,35 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
             [6] = """
                 DROP TABLE IF EXISTS stats_visitors_daily;
                 DROP TABLE IF EXISTS stats_daily;
+                """,
+            [7] = """
+                CREATE TABLE secret_request_audit (
+                    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                    request_id uuid NOT NULL UNIQUE,
+                    trace_id text NOT NULL,
+                    secret_id text NOT NULL CHECK (secret_id ~ '^[A-Za-z0-9_-]{22}$'),
+                    secret_id_source text NOT NULL CHECK (secret_id_source IN ('route','reserved')),
+                    requested_secret_id text CHECK (requested_secret_id IS NULL OR length(requested_secret_id) <= 256),
+                    action text NOT NULL CHECK (action IN ('create','metadata','open','unlock','file_open','revoke','secret_page','secret_request')),
+                    http_method text NOT NULL CHECK (length(http_method) > 0),
+                    route_template text NOT NULL CHECK (length(route_template) BETWEEN 1 AND 128),
+                    started_at timestamptz NOT NULL,
+                    completed_at timestamptz,
+                    duration_ms bigint CHECK (duration_ms IS NULL OR duration_ms >= 0),
+                    state text NOT NULL CHECK (state IN ('started','completed','aborted')),
+                    outcome text,
+                    http_status smallint CHECK (http_status IS NULL OR http_status BETWEEN 100 AND 599),
+                    error_code text CHECK (error_code IS NULL OR length(error_code) <= 64),
+                    client_ip inet,
+                    file_id text,
+                    CHECK (
+                        (state='started' AND completed_at IS NULL AND duration_ms IS NULL AND outcome IS NULL AND http_status IS NULL AND error_code IS NULL)
+                        OR (state='completed' AND completed_at IS NOT NULL AND duration_ms IS NOT NULL AND outcome IS NOT NULL AND outcome IN ('success','rejected','error'))
+                        OR (state='aborted' AND completed_at IS NOT NULL AND duration_ms IS NOT NULL AND outcome IS NOT NULL AND outcome='aborted')
+                    )
+                );
+                CREATE INDEX ix_secret_request_audit_secret_started ON secret_request_audit (secret_id, started_at, id);
+                CREATE INDEX ix_secret_request_audit_started ON secret_request_audit (started_at, id);
                 """
         };
         foreach (var (version, sql) in migrations.OrderBy(pair => pair.Key))
@@ -326,7 +369,7 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
         return true;
     }
 
-    public async Task<StoredSecret?> CreateAsync(StoredSecret secret, CancellationToken cancellationToken = default)
+    public async Task<StoredSecret?> CreateAsync(StoredSecret secret, Guid? auditRequestId = null, CancellationToken cancellationToken = default)
     {
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
@@ -357,6 +400,8 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
         command.Parameters.AddWithValue(System.Text.Json.JsonSerializer.Serialize(secret.Files, InfrastructureJsonContext.Default.IReadOnlyListStoredFile));
         command.Parameters.AddWithValue((object?)secret.RevokeTokenHash ?? DBNull.Value);
         var created = await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+        if (created && auditRequestId is { } requestId)
+            await FinishAuditInTransactionAsync(connection, transaction, requestId, 201, "success", null, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return created ? secret : null;
     }
@@ -431,13 +476,65 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
         return new UnlockAttemptAdmission(true, true);
     }
 
-    public async Task ResetUnlockAttemptsAsync(string id, CancellationToken cancellationToken = default)
+    public async Task ResetUnlockAttemptsAsync(string id, Guid? auditRequestId = null, CancellationToken cancellationToken = default)
     {
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using var command = new NpgsqlCommand("UPDATE secrets SET unlock_attempt_count = 0, unlock_attempt_window_started_at = NULL, unlock_blocked_until = NULL WHERE id = $1", connection);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+        await using var command = new NpgsqlCommand("UPDATE secrets SET unlock_attempt_count = 0, unlock_attempt_window_started_at = NULL, unlock_blocked_until = NULL WHERE id = $1", connection, transaction);
         command.Parameters.AddWithValue(id);
-        await command.ExecuteNonQueryAsync(cancellationToken);
+        var updated = await command.ExecuteNonQueryAsync(cancellationToken);
+        if (auditRequestId is not null && updated != 1) throw new FileNotFoundException();
+        if (auditRequestId is { } requestId)
+            await FinishAuditInTransactionAsync(connection, transaction, requestId, 200, "success", null, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task<StoredSecret?> RevokeAsync(string id, string revokeTokenHash, Guid? auditRequestId = null, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+        StoredSecret? secret;
+        await using (var select = new NpgsqlCommand("SELECT id, expires_at, protocol_version, nonce, blob_id, password_salt, message_outer_nonce, ciphertext_size, files_json, revoke_token_hash FROM secrets WHERE id=$1 AND revoke_token_hash=$2 FOR UPDATE", connection, transaction))
+        {
+            select.Parameters.AddWithValue(id);
+            select.Parameters.AddWithValue(revokeTokenHash);
+            await using var reader = await select.ExecuteReaderAsync(CommandBehavior.SingleRow, cancellationToken);
+            secret = await reader.ReadAsync(cancellationToken) ? Read(reader) with { RevokeTokenHash = reader.GetString(9) } : null;
+        }
+        if (secret is null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return null;
+        }
+        await using (var delete = new NpgsqlCommand("DELETE FROM secrets WHERE id=$1", connection, transaction))
+        {
+            delete.Parameters.AddWithValue(id);
+            await delete.ExecuteNonQueryAsync(cancellationToken);
+        }
+        if (auditRequestId is { } requestId)
+            await FinishAuditInTransactionAsync(connection, transaction, requestId, 204, "success", null, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return secret;
+    }
+
+    private static async Task FinishAuditInTransactionAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, Guid requestId, int status, string outcome, string? errorCode, CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand("UPDATE secret_request_audit SET completed_at=NOW(), duration_ms=GREATEST(0, (EXTRACT(EPOCH FROM (NOW()-started_at))*1000)::bigint), state='completed', outcome=$2, http_status=$3, error_code=$4 WHERE request_id=$1 AND state='started'", connection, transaction);
+        command.Parameters.AddWithValue(requestId);
+        command.Parameters.AddWithValue(outcome);
+        command.Parameters.AddWithValue(status);
+        command.Parameters.AddWithValue((object?)errorCode ?? DBNull.Value);
+        try
+        {
+            if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+                throw new InvalidOperationException("Audit request was not in the started state.");
+        }
+        catch (Exception ex) when (ex is not SecretAuditUnavailableException)
+        {
+            throw new SecretAuditUnavailableException(ex);
+        }
     }
 
     public async Task<IReadOnlyList<StoredSecret>> GetExpiredAsync(DateTimeOffset now, int batchSize, CancellationToken cancellationToken = default)

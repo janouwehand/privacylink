@@ -3,6 +3,8 @@ using System.Diagnostics;
 using System.Net;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using PrivacyLink.Api;
 using PrivacyLink.Contracts;
 using PrivacyLink.Infrastructure;
@@ -17,6 +19,21 @@ SecretStoreConfiguration.ApplyFileSecrets(builder.Configuration);
 ProductionConfiguration.Validate(builder.Configuration, builder.Environment.IsProduction());
 builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.TypeInfoResolverChain.Insert(0, PrivacyLinkJsonContext.Default));
+builder.Services.AddSingleton<AdminPasswordVerifier>();
+builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme).AddCookie(options =>
+{
+    options.Cookie.Name = builder.Environment.IsProduction() ? "__Host-PrivacyLink.Admin" : "PrivacyLink.Admin";
+    options.Cookie.HttpOnly = true;
+    options.Cookie.IsEssential = true;
+    options.Cookie.SameSite = SameSiteMode.Strict;
+    options.Cookie.SecurePolicy = builder.Environment.IsProduction() ? CookieSecurePolicy.Always : CookieSecurePolicy.SameAsRequest;
+    options.Cookie.Path = "/";
+    options.ExpireTimeSpan = TimeSpan.FromHours(8);
+    options.SlidingExpiration = false;
+    options.Events.OnRedirectToLogin = context => { context.Response.StatusCode = StatusCodes.Status401Unauthorized; return Task.CompletedTask; };
+    options.Events.OnRedirectToAccessDenied = context => { context.Response.StatusCode = StatusCodes.Status403Forbidden; return Task.CompletedTask; };
+});
+builder.Services.AddAuthorization();
 var maxRequestBytes = int.TryParse(builder.Configuration["Limits:MaxRequestBytes"], out var configuredRequestBytes) && configuredRequestBytes > 0 ? configuredRequestBytes : 110 * 1024 * 1024;
 builder.WebHost.ConfigureKestrel(options =>
 {
@@ -41,6 +58,7 @@ builder.Services.AddSingleton(sp => new PasswordEnvelopeService(new PasswordEnve
     BoundedLimit(builder.Configuration, "Security:Argon2:MaxQueuedUnlocks", 8, 0, 64),
     BoundedLimit(builder.Configuration, "Security:Argon2:UnlockQueueTimeoutSeconds", 30, 1, 120))));
 builder.Services.AddSingleton<SecretApplicationService>();
+builder.Services.AddTransient<SecretRequestAuditMiddleware>();
 builder.Services.AddPrivacyLinkInfrastructure(builder.Configuration);
 builder.Services.AddRateLimiter(options =>
 {
@@ -81,16 +99,26 @@ builder.Services.AddRateLimiter(options =>
         RateLimiter.CreateChained(
             new FixedWindowRateLimiter(new FixedWindowRateLimiterOptions { PermitLimit = revokePerMinute, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }),
             new FixedWindowRateLimiter(new FixedWindowRateLimiterOptions { PermitLimit = revokePerHour, Window = TimeSpan.FromHours(1), QueueLimit = 0 }))));
+    options.AddPolicy("admin-login", context => RateLimitPartition.GetFixedWindowLimiter(
+        PrivacyAudit.ClientAddress(context),
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 5, Window = TimeSpan.FromMinutes(15), QueueLimit = 0 }));
 });
 
 var app = builder.Build();
 app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
 {
     PrivacyAudit.Log(context, "unhandled_error");
-    context.Response.StatusCode = StatusCodes.Status500InternalServerError;
-    await context.Response.WriteAsJsonAsync(new ErrorResponse("server_error"), PrivacyLinkJsonContext.Default.ErrorResponse);
+    var error = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error ?? new InvalidOperationException();
+    var failure = PrivacyAudit.Failure(error);
+    if (error is SecretAuditUnavailableException)
+        context.Items[PrivacyAudit.ErrorCodeItem] = failure.ErrorCode;
+    context.Response.StatusCode = failure.StatusCode;
+    await context.Response.WriteAsJsonAsync(new ErrorResponse(failure.ErrorCode), PrivacyLinkJsonContext.Default.ErrorResponse);
 }));
 app.UseForwardedHeaders();
+app.UseMiddleware<SecretRequestAuditMiddleware>();
+app.UseAuthentication();
+app.UseAuthorization();
 app.Use(async (context, next) =>
 {
     var requireHttps = builder.Environment.IsProduction() && (!bool.TryParse(builder.Configuration["Security:RequireHttps"], out var configuredRequireHttps) || configuredRequireHttps);
@@ -160,9 +188,14 @@ app.MapGet("/health/ready", async (IStorageReadiness health, HttpContext context
         : Results.Json(new ErrorResponse("not_ready"), PrivacyLinkJsonContext.Default.ErrorResponse, statusCode: StatusCodes.Status503ServiceUnavailable));
 app.MapGet("/api/v1/capabilities", (IConfiguration configuration) => SecretEndpoints.Capabilities(configuration));
 app.MapGet("/api/v1/stats", () => Results.Json(new ErrorResponse("statistics_retired"), PrivacyLinkJsonContext.Default.ErrorResponse, statusCode: StatusCodes.Status410Gone));
-app.MapPost("/api/v1/secrets", (HttpRequest request, SecretApplicationService service, IConfiguration configuration) => SecretEndpoints.Create(request, service, configuration)).RequireRateLimiting("create");
+var adminApi = app.MapGroup("/api/v1/admin");
+adminApi.MapPost("/login", (Delegate)AdminEndpoints.Login).RequireRateLimiting("admin-login");
+adminApi.MapGet("/session", (Delegate)AdminEndpoints.Session).RequireAuthorization();
+adminApi.MapPost("/logout", (Delegate)AdminEndpoints.Logout).RequireAuthorization();
+adminApi.MapGet("/audit", (Delegate)AdminEndpoints.Audit).RequireAuthorization();
+app.MapPost("/api/v1/secrets", (HttpRequest request, HttpContext context, SecretApplicationService service, IConfiguration configuration) => SecretEndpoints.Create(request, context, service, configuration)).RequireRateLimiting("create");
 app.MapGet("/api/v1/secrets/{id}", (string id, SecretApplicationService service, TimeProvider clock) => SecretEndpoints.Metadata(id, service, clock));
-app.MapPost("/api/v1/secrets/{id}/revoke", (string id, HttpRequest request, SecretApplicationService service) => SecretEndpoints.Revoke(id, request, service)).RequireRateLimiting("revoke");
+app.MapPost("/api/v1/secrets/{id}/revoke", (string id, HttpRequest request, SecretApplicationService service, ILoggerFactory loggerFactory) => SecretEndpoints.Revoke(id, request, service, loggerFactory)).RequireRateLimiting("revoke");
 app.MapPost("/api/v1/secrets/{id}/open", (string id, HttpRequest request, SecretApplicationService service, TimeProvider clock) => SecretEndpoints.Open(id, request, service, clock)).RequireRateLimiting("open");
 app.MapPost("/api/v1/secrets/{id}/unlock", (string id, HttpRequest request, SecretApplicationService service, TimeProvider clock, IConfiguration configuration) => SecretEndpoints.Unlock(id, request, service, clock, configuration)).RequireRateLimiting("unlock");
 app.MapPost("/api/v1/secrets/{id}/files/{fileId}/open", (string id, string fileId, HttpRequest request, SecretApplicationService service, TimeProvider clock) => SecretEndpoints.OpenFile(id, fileId, request, service, clock)).RequireRateLimiting("open");
@@ -193,6 +226,9 @@ static int BoundedLimit(IConfiguration configuration, string key, int fallback, 
 [JsonSerializable(typeof(ErrorResponse))]
 [JsonSerializable(typeof(UnlockSecretRequest))]
 [JsonSerializable(typeof(CreateSecretRequest))]
+[JsonSerializable(typeof(AdminLoginRequest))]
+[JsonSerializable(typeof(AdminSessionResponse))]
+[JsonSerializable(typeof(AdminAuditPageResponse))]
 internal partial class PrivacyLinkJsonContext : JsonSerializerContext;
 
 public partial class Program;

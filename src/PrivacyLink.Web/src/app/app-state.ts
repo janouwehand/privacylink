@@ -3,7 +3,7 @@ import { Title } from '@angular/platform-browser';
 import { LanguageState } from './language-state';
 import type { TranslationKey } from './translations';
 
-export type AppMode = 'create' | 'result' | 'recipient' | 'history' | 'security' | 'statistics' | 'security-details' | 'password-generator' | 'not-found';
+export type AppMode = 'create' | 'result' | 'recipient' | 'history' | 'security' | 'statistics' | 'security-details' | 'password-generator' | 'admin' | 'not-found';
 
 const PAGE_TITLE_KEYS: Record<AppMode, TranslationKey> = {
   create: 'appTitle',
@@ -14,6 +14,7 @@ const PAGE_TITLE_KEYS: Record<AppMode, TranslationKey> = {
   statistics: 'pageTitleStatistics',
   'security-details': 'pageTitleSecurityDetails',
   'password-generator': 'pageTitlePasswordGenerator',
+  admin: 'pageTitleAdmin',
   'not-found': 'pageTitleNotFound'
 };
 
