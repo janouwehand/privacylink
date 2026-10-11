@@ -99,6 +99,21 @@ h2 { font-size: 18px; margin: 0 0 26px; }
 .password-copy-dialog::backdrop { background: rgba(17, 17, 17, .48); }
 .password-generator-dialog { width: min(640px, calc(100% - 32px)); max-height: min(92vh, 780px); overflow-y: auto; margin: auto; padding: 0; border: 1px solid #d8dfdc; border-top: 3px solid #4A9B8D; color: #151515; background: #fff; box-shadow: 0 18px 60px rgba(0, 0, 0, .24); }
 .password-generator-dialog::backdrop { background: rgba(17, 17, 17, .58); }
+.work-progress-dialog { width: min(500px, calc(100% - 32px)); max-height: min(80vh, 640px); margin: auto; display: none; align-items: flex-start; gap: 18px; border: 1px solid #d8dfdc; border-top: 3px solid #4A9B8D; padding: 26px; color: #151515; background: #fff; box-shadow: 0 18px 60px rgba(0, 0, 0, .24); }
+.work-progress-dialog[open] { display: flex; }
+.work-progress-dialog::backdrop { background: rgba(17, 17, 17, .58); }
+.work-progress-indicator { flex: 0 0 28px; width: 28px; height: 28px; margin-top: 2px; border: 3px solid #dce8e5; border-top-color: #4A9B8D; border-radius: 50%; animation: work-progress-spin .8s linear infinite; }
+.work-progress-content { min-width: 0; flex: 1; }
+.work-progress-content h2 { margin: 0 0 8px; font-size: 20px; }
+.work-progress-content p { margin: 0; color: #555; font-size: 14px; line-height: 1.5; }
+.work-progress-files { display: grid; gap: 8px; max-height: min(38vh, 280px); overflow-y: auto; margin: 18px 0 0; padding: 0; list-style: none; }
+.work-progress-files li { display: flex; justify-content: space-between; gap: 16px; padding-top: 8px; border-top: 1px solid #e5e9e7; color: #616966; font-size: 13px; }
+.work-progress-files li.is-processing { color: #176d60; font-weight: 600; }
+.work-progress-files li.is-done { color: #3e655e; }
+.work-progress-file-name { min-width: 0; overflow-wrap: anywhere; }
+.work-progress-files li > span:last-child { flex: 0 0 auto; }
+@keyframes work-progress-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .work-progress-indicator { animation-duration: 1.8s; } }
 .generator { width: 100%; padding: 28px; border-top: 2px solid #16333A; background: #fff; }
 .generator-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 22px; }
 .generator-heading .eyebrow { margin-bottom: 8px; }

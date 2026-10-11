@@ -1,16 +1,18 @@
 import { DOCUMENT } from '@angular/common';
 import { computed, inject, Injectable, signal } from '@angular/core';
 import { SecretApi, SecretApiError } from '../secret-api';
-import { decodeCanonical, decryptFile, decryptFileName, decryptMessage, derivePasswordToken } from '../secret-crypto';
+import { decodeCanonical, derivePasswordToken } from '../secret-crypto';
 import { LanguageState } from '../language-state';
-import type { EncryptedPayload } from '../secret-crypto';
 import type { TranslatableError } from '../translations';
+import { WorkProgressState } from '../work-progress-state';
+import { getSecretCryptoWorkerClient } from '../secret-crypto-worker-client';
 
 @Injectable()
 export class RecipientState {
   private readonly api = inject(SecretApi);
   private readonly language = inject(LanguageState);
   private readonly document = inject(DOCUMENT);
+  private readonly workProgress = inject(WorkProgressState);
 
   readonly unlockPassword = signal('');
   readonly metadataFiles = signal<{ id: string; name: string; extension: string; mimeType: string; size: number }[]>([]);
@@ -22,13 +24,13 @@ export class RecipientState {
   readonly openedMessage = signal('');
   readonly expiresAt = signal('');
   readonly passwordProtected = signal(false);
-  readonly openedPayload = signal<EncryptedPayload | null>(null);
   readonly error = signal<TranslatableError[]>([]);
   readonly lockoutSeconds = signal(0);
   readonly errorText = computed(() => this.error().map(error => this.language.translateError(error)).join(' '));
 
   private recipientId = '';
   private recipientKey = '';
+  private cachedFilesToken: string | undefined;
   private metadataRequestId = 0;
   private lockoutTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -58,9 +60,20 @@ export class RecipientState {
       if (!metadata.exists || metadata.protocolVersion !== 1 || (!metadata.hasMessage && metadata.fileCount === 0)) {
         throw new Error('unsupported protocol');
       }
-      const files = metadata.passwordProtected
-        ? []
-        : await Promise.all(metadata.files.map(async file => ({ ...file, name: await decryptFileName(file, key) })));
+      let files: { id: string; name: string; extension: string; mimeType: string; size: number }[] = [];
+      if (!metadata.passwordProtected && metadata.files.length) {
+        this.workProgress.begin('open', metadata.files.map((_, index) => this.language.t('workFileNumber', { number: index + 1 })));
+        this.workProgress.setStage('processing');
+        const worker = getSecretCryptoWorkerClient();
+        for (let index = 0; index < metadata.files.length; index++) {
+          this.workProgress.setFileStatus(index, 'processing');
+          const file = metadata.files[index]!;
+          const name = await worker.decryptFileName(file, key, undefined, file.extension);
+          files.push({ ...file, name });
+          this.workProgress.setFileName(index, name);
+          this.workProgress.setFileStatus(index, 'done');
+        }
+      }
       if (requestId !== this.metadataRequestId) return;
       this.passwordProtected.set(metadata.passwordProtected);
       this.expiresAt.set(metadata.expiresAt);
@@ -70,18 +83,23 @@ export class RecipientState {
     }).catch(() => {
       if (requestId === this.metadataRequestId) this.setError({ key: 'unavailable' });
     }).finally(() => {
-      if (requestId === this.metadataRequestId) this.loadingMetadata.set(false);
+      if (requestId === this.metadataRequestId) {
+        this.loadingMetadata.set(false);
+        this.workProgress.finish();
+      }
     });
   }
 
   leave(): void {
     this.metadataRequestId++;
+    this.workProgress.finish();
     this.clearLockout();
     this.clearRecipientData();
     this.clearError();
   }
 
   private clearRecipientData(): void {
+    this.clearCachedFilePayload();
     this.clearLockout();
     this.recipientId = '';
     this.recipientKey = '';
@@ -92,7 +110,6 @@ export class RecipientState {
     this.metadataFileCount.set(0);
     this.opened.set(false);
     this.openedMessage.set('');
-    this.openedPayload.set(null);
     this.passwordProtected.set(false);
     this.expiresAt.set('');
     this.busy.set(false);
@@ -102,18 +119,41 @@ export class RecipientState {
     if (this.busy() || !this.metadataReady() || this.lockoutSeconds() > 0) return;
     const requestId = this.metadataRequestId;
     this.busy.set(true);
+    this.workProgress.begin('open', this.passwordProtected() ? [] : this.metadataFiles().map(file => file.name));
+    this.workProgress.setStage('fetching');
     this.clearError();
     try {
-      const payload = this.passwordProtected()
-        ? await this.api.unlock(this.recipientId, await derivePasswordToken(this.unlockPassword(), this.recipientKey))
-        : await this.api.open(this.recipientId);
+      let files = this.metadataFiles();
+      let message = '';
+      const rawResponse = this.passwordProtected()
+        ? await this.api.unlockRaw(this.recipientId, await derivePasswordToken(this.unlockPassword(), this.recipientKey))
+        : await this.api.openRaw(this.recipientId);
       if (requestId !== this.metadataRequestId) return;
-      const files = this.passwordProtected()
-        ? await Promise.all(payload.files.map(async file => ({ ...file, name: await decryptFileName(file, this.recipientKey) })))
-        : this.metadataFiles();
-      const message = payload.message ? await decryptMessage(payload, this.recipientKey) : '';
+      this.workProgress.setStage('processing');
+      const worker = getSecretCryptoWorkerClient();
+      const opened = await worker.decryptOpenSecretResponse(rawResponse, this.recipientKey, progress => {
+        if (!this.workProgress.files().length && progress.total > 0) {
+          this.workProgress.setFiles(Array.from({ length: progress.total }, (_, index) => this.language.t('workFileNumber', { number: index + 1 })));
+        }
+        for (let index = 0; index < progress.current - 1; index++) this.workProgress.setFileStatus(index, 'done');
+        if (progress.current <= progress.total) this.workProgress.setFileStatus(progress.current - 1, 'processing');
+      });
+      if (requestId !== this.metadataRequestId) {
+        void getSecretCryptoWorkerClient().clearCachedFiles(opened.token);
+        return;
+      }
+      if (opened.files.length) {
+        this.cachedFilesToken = opened.token;
+        files = opened.files;
+      } else {
+        void worker.clearCachedFiles(opened.token);
+        if (this.passwordProtected() && this.metadataFileCount() > 0) throw new Error('missing protected file payload');
+        if (!this.passwordProtected()) files = this.metadataFiles();
+      }
+      this.workProgress.setFiles(files.map(file => file.name));
+      files.forEach((_, index) => this.workProgress.setFileStatus(index, 'done'));
+      message = opened.message ?? '';
       if (requestId !== this.metadataRequestId) return;
-      this.openedPayload.set(payload);
       this.metadataFiles.set(files);
       this.openedMessage.set(message);
       this.opened.set(true);
@@ -135,6 +175,7 @@ export class RecipientState {
         this.unlockPassword.set('');
         this.busy.set(false);
       }
+      this.workProgress.finish();
     }
   }
 
@@ -163,23 +204,42 @@ export class RecipientState {
   }
 
   async download(file: { id: string; name: string; extension: string; mimeType: string }): Promise<void> {
+    if (this.workProgress.active()) return;
     const requestId = this.metadataRequestId;
+    this.workProgress.begin('download', [file.name]);
+    this.workProgress.setFileStatus(0, 'processing');
     try {
-      const opened = this.passwordProtected()
-        ? this.openedPayload()?.files.find(item => item.id === file.id)
-        : (await this.api.openFile(this.recipientId, file.id)).file;
-      if (!opened) throw new Error('missing file');
-      const name = await decryptFileName(opened, this.recipientKey);
-      const data = await decryptFile(opened, this.recipientKey);
+      const worker = getSecretCryptoWorkerClient();
+      let opened;
+      if (this.passwordProtected()) {
+        if (!this.cachedFilesToken) throw new Error('missing file payload');
+        this.workProgress.setStage('processing');
+        opened = await worker.decryptCachedFile(this.cachedFilesToken, file.id, this.recipientKey, undefined, file.name);
+      } else {
+        this.workProgress.setStage('fetching');
+        const response = await this.api.openFileRaw(this.recipientId, file.id);
+        this.workProgress.setStage('processing');
+        opened = await worker.decryptOpenFileResponse(response, this.recipientKey);
+      }
       if (requestId !== this.metadataRequestId) return;
-      const url = URL.createObjectURL(new Blob([data.buffer as ArrayBuffer], { type: file.mimeType || 'application/octet-stream' }));
+      this.workProgress.setFileStatus(0, 'done');
+      const url = URL.createObjectURL(new Blob([opened.data], { type: opened.mimeType || file.mimeType || 'application/octet-stream' }));
       const anchor = this.document.createElement('a');
       anchor.href = url;
-      anchor.download = name.replace(/[\\/:\0]/g, '_');
+      anchor.download = opened.filename.replace(/[\\/:\0]/g, '_');
       anchor.click();
       URL.revokeObjectURL(url);
     } catch {
       if (requestId === this.metadataRequestId) this.setError({ key: 'decryptFailure' });
+    } finally {
+      this.workProgress.finish();
     }
+  }
+
+  private clearCachedFilePayload(): void {
+    if (!this.cachedFilesToken) return;
+    const token = this.cachedFilesToken;
+    this.cachedFilesToken = undefined;
+    void getSecretCryptoWorkerClient().clearCachedFiles(token).catch(() => undefined);
   }
 }

@@ -26,6 +26,18 @@ const messagesNl = {
   twoWeeks: '2 weken',
   create: 'Maak veilige link',
   creating: 'Link maken…',
+  workCreateTitle: 'Veilige link maken',
+  workOpenTitle: 'Gedeelde inhoud openen',
+  workDownloadTitle: 'Bestand voorbereiden',
+  workEncrypting: 'Bericht en bestanden versleutelen…',
+  workDecrypting: 'Inhoud ontsleutelen…',
+  workFetching: 'Versleutelde inhoud ophalen…',
+  workUploading: 'Versleutelde inhoud uploaden…',
+  workFileStatuses: 'Bestandsstatus',
+  workFilePending: 'Wacht',
+  workFileProcessing: 'Bezig…',
+  workFileDone: 'Klaar',
+  workFileNumber: 'Bestand {number}',
   readyEyebrow: 'Link klaar',
   ready: 'Je veilige link is klaar.',
   readyIntro: 'Deel deze link. Iedereen met de volledige link kan de inhoud openen tot de vervaldatum.',
@@ -176,6 +188,7 @@ type TranslationParameters = {
   tooManyFiles: { max: number };
   filesTooLarge: { size: string };
   rateLimitedCountdown: { time: string };
+  workFileNumber: { number: number };
 };
 
 export type TranslationArguments<K extends TranslationKey> =
@@ -207,6 +220,18 @@ const messagesEn = {
   twoWeeks: '2 weeks',
   create: 'Create secure link',
   creating: 'Creating link…',
+  workCreateTitle: 'Creating a secure link',
+  workOpenTitle: 'Opening shared content',
+  workDownloadTitle: 'Preparing file',
+  workEncrypting: 'Encrypting message and files…',
+  workDecrypting: 'Decrypting content…',
+  workFetching: 'Fetching encrypted content…',
+  workUploading: 'Uploading encrypted content…',
+  workFileStatuses: 'File status',
+  workFilePending: 'Waiting',
+  workFileProcessing: 'Working…',
+  workFileDone: 'Done',
+  workFileNumber: 'File {number}',
   readyEyebrow: 'Link ready',
   ready: 'Your secure link is ready.',
   readyIntro: 'Share this link. Anyone with the complete link can open the contents until expiry.',
