@@ -31,6 +31,7 @@ const messagesNl = {
   workDownloadTitle: 'Bestand voorbereiden',
   workEncrypting: 'Bericht en bestanden versleutelen…',
   workPreparing: 'Aanvraag voorbereiden…',
+  proofPreparing: 'Beveiliging voorbereiden…',
   workDecrypting: 'Inhoud ontsleutelen…',
   workFetching: 'Versleutelde inhoud ophalen…',
   workUploading: 'Versleutelde inhoud uploaden…',
@@ -66,6 +67,7 @@ const messagesNl = {
   invalidLink: 'Deze link is ongeldig.',
   unavailable: 'Deze link bestaat niet, is verlopen of is ingetrokken.',
   failure: 'Er is iets misgegaan. Probeer het opnieuw.',
+  creationRateLimited: 'We kunnen de veilige link nu niet maken omdat er te veel aanvragen zijn. Wacht even en probeer het opnieuw.',
   decryptFailure: 'Deze PrivacyLink-inhoud kon niet worden ontsleuteld.',
   incorrectPassword: 'Dat lukte niet. Controleer de PIN of het wachtwoord en probeer het opnieuw. Klopt de invoer volgens jou? Vraag de afzender dan via een vertrouwd kanaal om de gegevens te controleren of een nieuwe link te sturen.',
   temporarilyUnavailable: 'Het is druk. Probeer het over enkele ogenblikken opnieuw.',
@@ -138,6 +140,21 @@ const messagesNl = {
   revokeLink: 'Link intrekken',
   clearHistory: 'Geschiedenis wissen',
   optionalPassword: 'Optionele PIN of wachtwoord',
+  emailVerificationAdd: 'Verificatie via e-mail instellen (optioneel)',
+  emailVerificationConfirm: 'Instellen',
+  emailVerificationChange: 'Wijzigen',
+  emailVerificationRemove: 'Verwijderen',
+  emailVerificationEnabledFor: 'E-mailverificatie voor {email}',
+  emailVerificationEyebrow: 'Extra beveiliging',
+  emailVerificationTitle: 'Verificatie via e-mail instellen',
+  emailVerificationIntro: 'De ontvanger heeft toegang tot deze mailbox nodig om het bericht te openen.',
+  emailVerificationStep1: 'Na het openen van de link vraagt de ontvanger een eenmalige code aan.',
+  emailVerificationStep2: 'De ontvanger ziet dit e-mailadres gemaskeerd en ontvangt de code in de mailbox.',
+  emailVerificationStep3: 'Na het invullen van de code kan de ontvanger het bericht lezen.',
+  emailVerificationPrivacyHint: 'Voorbeeldweergave: er wordt nog geen e-mail verstuurd.',
+  emailVerificationSave: 'Wijzigingen opslaan',
+  recipientEmail: 'E-mailadres van de ontvanger',
+  emailPlaceholder: 'naam@voorbeeld.nl',
   openPasswordGenerator: 'Wachtwoordgenerator openen',
   generatorTitle: 'Wachtwoordgenerator',
   generatorPageTitle: 'Genereer een veilige code',
@@ -227,6 +244,7 @@ type TranslationParameters = {
   workFileNumber: { number: number };
   adminPageSummary: { page: number; pages: number; total: number };
   adminSortBy: { column: string; direction: string };
+  emailVerificationEnabledFor: { email: string };
 };
 
 export type TranslationArguments<K extends TranslationKey> =
@@ -263,6 +281,7 @@ const messagesEn = {
   workDownloadTitle: 'Preparing file',
   workEncrypting: 'Encrypting message and files…',
   workPreparing: 'Preparing request…',
+  proofPreparing: 'Preparing security…',
   workDecrypting: 'Decrypting content…',
   workFetching: 'Fetching encrypted content…',
   workUploading: 'Uploading encrypted content…',
@@ -298,6 +317,7 @@ const messagesEn = {
   invalidLink: 'This link is invalid.',
   unavailable: 'This link does not exist, has expired, or has been revoked.',
   failure: 'Something went wrong. Please try again.',
+  creationRateLimited: 'We cannot create the secure link right now because there have been too many requests. Wait a little and try again.',
   decryptFailure: 'This PrivacyLink content could not be decrypted.',
   incorrectPassword: 'That did not work. Check the PIN or password and try again. If you are sure it is correct, ask the sender to check it or send a new link through a trusted channel.',
   temporarilyUnavailable: 'The service is busy. Please try again in a few moments.',
@@ -370,6 +390,21 @@ const messagesEn = {
   revokeLink: 'Revoke link',
   clearHistory: 'Clear history',
   optionalPassword: 'Optional PIN or password',
+  emailVerificationAdd: 'Set up email verification (optional)',
+  emailVerificationConfirm: 'Set up',
+  emailVerificationChange: 'Change',
+  emailVerificationRemove: 'Remove',
+  emailVerificationEnabledFor: 'Email verification for {email}',
+  emailVerificationEyebrow: 'Extra protection',
+  emailVerificationTitle: 'Set up email verification',
+  emailVerificationIntro: 'The recipient needs access to this mailbox to open the message.',
+  emailVerificationStep1: 'After opening the link, the recipient requests a one-time code.',
+  emailVerificationStep2: 'The recipient sees this email address masked and receives the code in that mailbox.',
+  emailVerificationStep3: 'After entering the code, the recipient can read the message.',
+  emailVerificationPrivacyHint: 'Preview only: no email will be sent yet.',
+  emailVerificationSave: 'Save changes',
+  recipientEmail: 'Recipient email address',
+  emailPlaceholder: 'name@example.com',
   openPasswordGenerator: 'Open password generator',
   generatorTitle: 'Password generator',
   generatorPageTitle: 'Generate a secure code',
@@ -470,4 +505,4 @@ export type TranslatableError =
   | { key: 'unsupportedFileType'; params: { files: string } }
   | { key: 'tooManyFiles'; params: { max: number } }
   | { key: 'filesTooLarge'; params: { sizeInBytes: number } }
-  | { key: 'invalidLink' | 'unavailable' | 'failure' | 'decryptFailure' | 'incorrectPassword' | 'temporarilyUnavailable' | 'rateLimited' | 'clipboardFailure' };
+  | { key: 'invalidLink' | 'unavailable' | 'failure' | 'creationRateLimited' | 'decryptFailure' | 'incorrectPassword' | 'temporarilyUnavailable' | 'rateLimited' | 'clipboardFailure' };
