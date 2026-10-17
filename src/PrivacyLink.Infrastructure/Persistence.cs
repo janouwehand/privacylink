@@ -362,6 +362,55 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
                     expires_at timestamptz NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS ix_create_proof_replays_expires_at ON create_proof_replays (expires_at);
+                """,
+            [9] = """
+                ALTER TABLE secrets ADD COLUMN IF NOT EXISTS email_address text;
+                ALTER TABLE secret_request_audit DROP CONSTRAINT IF EXISTS secret_request_audit_action_check;
+                ALTER TABLE secret_request_audit ADD CONSTRAINT secret_request_audit_action_check CHECK (action IN ('create','metadata','open','unlock','file_open','revoke','email_request','email_verify','secret_page','secret_request'));
+                CREATE TABLE IF NOT EXISTS email_verification_challenges (
+                    secret_id text PRIMARY KEY REFERENCES secrets(id) ON DELETE CASCADE,
+                    code_mac bytea NOT NULL CHECK (octet_length(code_mac)=32),
+                    expires_at timestamptz NOT NULL,
+                    failed_attempts integer NOT NULL DEFAULT 0 CHECK (failed_attempts BETWEEN 0 AND 2),
+                    active boolean NOT NULL DEFAULT false
+                );
+                CREATE INDEX IF NOT EXISTS ix_email_verification_challenges_expires ON email_verification_challenges (expires_at);
+                CREATE TABLE IF NOT EXISTS email_verification_sessions (
+                    session_mac bytea PRIMARY KEY CHECK (octet_length(session_mac)=32),
+                    secret_id text NOT NULL REFERENCES secrets(id) ON DELETE CASCADE,
+                    expires_at timestamptz NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS ix_email_verification_sessions_secret_expiry ON email_verification_sessions (secret_id, expires_at);
+                CREATE TABLE IF NOT EXISTS email_verification_events (
+                    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                    event_kind text NOT NULL CHECK (event_kind IN ('request','send','failed')),
+                    ip_mac bytea NOT NULL CHECK (octet_length(ip_mac)=32),
+                    scope_mac bytea CHECK (scope_mac IS NULL OR octet_length(scope_mac)=32),
+                    secret_id text REFERENCES secrets(id) ON DELETE CASCADE,
+                    occurred_at timestamptz NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS ix_email_verification_events_ip ON email_verification_events (event_kind, ip_mac, occurred_at);
+                CREATE INDEX IF NOT EXISTS ix_email_verification_events_scope ON email_verification_events (event_kind, scope_mac, occurred_at);
+                CREATE INDEX IF NOT EXISTS ix_email_verification_events_expiry ON email_verification_events (occurred_at);
+                """
+            ,
+            [10] = """
+                CREATE TABLE IF NOT EXISTS email_verification_outbox (
+                    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                    secret_id text NOT NULL UNIQUE REFERENCES secrets(id) ON DELETE CASCADE,
+                    code_mac bytea NOT NULL CHECK (octet_length(code_mac)=32),
+                    nonce bytea NOT NULL CHECK (octet_length(nonce)=12),
+                    ciphertext bytea NOT NULL CHECK (octet_length(ciphertext)=6),
+                    auth_tag bytea NOT NULL CHECK (octet_length(auth_tag)=16),
+                    expires_at timestamptz NOT NULL,
+                    created_at timestamptz NOT NULL,
+                    lease_until timestamptz,
+                    lease_token uuid,
+                    attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+                    CHECK ((lease_until IS NULL AND lease_token IS NULL) OR (lease_until IS NOT NULL AND lease_token IS NOT NULL))
+                );
+                CREATE INDEX IF NOT EXISTS ix_email_verification_outbox_due ON email_verification_outbox (lease_until, id);
+                CREATE INDEX IF NOT EXISTS ix_email_verification_outbox_expires ON email_verification_outbox (expires_at);
                 """
         };
         foreach (var (version, sql) in migrations.OrderBy(pair => pair.Key))
@@ -396,7 +445,7 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
             return null;
         }
 
-        await using var command = new NpgsqlCommand("INSERT INTO secrets (id, expires_at, protocol_version, nonce, blob_id, password_salt, message_outer_nonce, ciphertext_size, files_json, revoke_token_hash) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT DO NOTHING", connection, transaction);
+        await using var command = new NpgsqlCommand("INSERT INTO secrets (id, expires_at, protocol_version, nonce, blob_id, password_salt, message_outer_nonce, ciphertext_size, files_json, revoke_token_hash, email_address) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT DO NOTHING", connection, transaction);
         command.Parameters.AddWithValue(secret.Id);
         command.Parameters.AddWithValue(secret.ExpiresAt.UtcDateTime);
         command.Parameters.AddWithValue(1);
@@ -407,6 +456,7 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
         command.Parameters.AddWithValue(secret.Size);
         command.Parameters.AddWithValue(System.Text.Json.JsonSerializer.Serialize(secret.Files, InfrastructureJsonContext.Default.IReadOnlyListStoredFile));
         command.Parameters.AddWithValue((object?)secret.RevokeTokenHash ?? DBNull.Value);
+        command.Parameters.AddWithValue((object?)secret.EmailAddress ?? DBNull.Value);
         var created = await command.ExecuteNonQueryAsync(cancellationToken) == 1;
         if (created && auditRequestId is { } requestId)
             await FinishAuditInTransactionAsync(connection, transaction, requestId, 201, "success", null, cancellationToken);
@@ -418,7 +468,7 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
     {
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using var command = new NpgsqlCommand("SELECT id, expires_at, protocol_version, nonce, blob_id, password_salt, message_outer_nonce, ciphertext_size, files_json FROM secrets WHERE id = $1 AND expires_at > $2", connection);
+        await using var command = new NpgsqlCommand("SELECT id, expires_at, protocol_version, nonce, blob_id, password_salt, message_outer_nonce, ciphertext_size, files_json, email_address FROM secrets WHERE id = $1 AND expires_at > $2", connection);
         command.Parameters.AddWithValue(id);
         command.Parameters.AddWithValue(now.UtcDateTime);
         await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow, cancellationToken);
@@ -429,7 +479,7 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
     {
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using var command = new NpgsqlCommand("SELECT id, expires_at, protocol_version, nonce, blob_id, password_salt, message_outer_nonce, ciphertext_size, files_json, revoke_token_hash FROM secrets WHERE id = $1 AND revoke_token_hash = $2", connection);
+        await using var command = new NpgsqlCommand("SELECT id, expires_at, protocol_version, nonce, blob_id, password_salt, message_outer_nonce, ciphertext_size, files_json, email_address, revoke_token_hash FROM secrets WHERE id = $1 AND revoke_token_hash = $2", connection);
         command.Parameters.AddWithValue(id);
         command.Parameters.AddWithValue(revokeTokenHash);
         await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow, cancellationToken);
@@ -504,12 +554,12 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
         await connection.OpenAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         StoredSecret? secret;
-        await using (var select = new NpgsqlCommand("SELECT id, expires_at, protocol_version, nonce, blob_id, password_salt, message_outer_nonce, ciphertext_size, files_json, revoke_token_hash FROM secrets WHERE id=$1 AND revoke_token_hash=$2 FOR UPDATE", connection, transaction))
+        await using (var select = new NpgsqlCommand("SELECT id, expires_at, protocol_version, nonce, blob_id, password_salt, message_outer_nonce, ciphertext_size, files_json, email_address, revoke_token_hash FROM secrets WHERE id=$1 AND revoke_token_hash=$2 FOR UPDATE", connection, transaction))
         {
             select.Parameters.AddWithValue(id);
             select.Parameters.AddWithValue(revokeTokenHash);
             await using var reader = await select.ExecuteReaderAsync(CommandBehavior.SingleRow, cancellationToken);
-            secret = await reader.ReadAsync(cancellationToken) ? Read(reader) with { RevokeTokenHash = reader.GetString(9) } : null;
+            secret = await reader.ReadAsync(cancellationToken) ? Read(reader) with { RevokeTokenHash = reader.GetString(10) } : null;
         }
         if (secret is null)
         {
@@ -550,7 +600,7 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
         var result = new List<StoredSecret>();
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using var command = new NpgsqlCommand("SELECT id, expires_at, protocol_version, nonce, blob_id, password_salt, message_outer_nonce, ciphertext_size, files_json FROM secrets WHERE expires_at <= $1 ORDER BY expires_at LIMIT $2", connection);
+        await using var command = new NpgsqlCommand("SELECT id, expires_at, protocol_version, nonce, blob_id, password_salt, message_outer_nonce, ciphertext_size, files_json, email_address FROM secrets WHERE expires_at <= $1 ORDER BY expires_at LIMIT $2", connection);
         command.Parameters.AddWithValue(now.UtcDateTime);
         command.Parameters.AddWithValue(batchSize);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -575,7 +625,9 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
         reader.GetInt64(7),
         System.Text.Json.JsonSerializer.Deserialize(reader.GetString(8), InfrastructureJsonContext.Default.ListStoredFile) ?? [],
         reader.IsDBNull(5) ? null : reader.GetString(5),
-        reader.IsDBNull(6) ? null : reader.GetString(6));
+        reader.IsDBNull(6) ? null : reader.GetString(6),
+        null,
+        reader.FieldCount > 9 && !reader.IsDBNull(9) ? reader.GetString(9) : null);
 }
 
 internal sealed class StorageHealth(IEnumerable<IInfrastructureHealthCheck> healthChecks) : IStorageReadiness

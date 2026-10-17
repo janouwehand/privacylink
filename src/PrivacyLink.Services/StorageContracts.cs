@@ -27,9 +27,31 @@ public sealed record StoredSecret(
     IReadOnlyList<StoredFile> Files,
     string? PasswordSalt = null,
     string? MessageOuterNonce = null,
-    string? RevokeTokenHash = null)
+    string? RevokeTokenHash = null,
+    string? EmailAddress = null)
 {
     public bool PasswordProtected => PasswordSalt is not null;
+}
+
+public enum EmailCodeVerificationStatus { Invalid, RateLimited, Verified }
+public enum EmailSecretAccessStatus { NotFound, NotRequired, VerificationRequired, Authorized }
+public sealed record EncryptedEmailCode(byte[] Nonce, byte[] Ciphertext, byte[] Tag);
+public sealed record ClaimedEmailDelivery(long OutboxId, Guid LeaseToken, string SecretId, byte[] CodeMac, byte[] Nonce, byte[] Ciphertext, byte[] Tag, string Recipient);
+
+public interface IEmailVerificationStore
+{
+    bool IsAvailable { get; }
+    Task RecordRequestAsync(System.Net.IPAddress clientIp, DateTimeOffset now, CancellationToken cancellationToken = default);
+    Task<EmailCodeVerificationStatus> RecordFailedCodeInputAsync(System.Net.IPAddress clientIp, DateTimeOffset now, CancellationToken cancellationToken = default);
+    Task RequestCodeAsync(string secretId, System.Net.IPAddress clientIp, byte[] codeMac, EncryptedEmailCode encryptedCode, DateTimeOffset now, CancellationToken cancellationToken = default);
+    Task<ClaimedEmailDelivery?> ClaimDeliveryAsync(DateTimeOffset now, TimeSpan leaseDuration, CancellationToken cancellationToken = default);
+    Task<bool> IsDeliveryCurrentAsync(ClaimedEmailDelivery delivery, DateTimeOffset now, CancellationToken cancellationToken = default);
+    Task CompleteDeliveryAsync(ClaimedEmailDelivery delivery, DateTimeOffset now, CancellationToken cancellationToken = default);
+    Task FailDeliveryAsync(ClaimedEmailDelivery delivery, CancellationToken cancellationToken = default);
+    Task DiscardDeliveryAsync(ClaimedEmailDelivery delivery, CancellationToken cancellationToken = default);
+    Task<EmailCodeVerificationStatus> VerifyCodeAsync(string secretId, System.Net.IPAddress clientIp, byte[] codeMac, byte[] sessionMac, DateTimeOffset now, CancellationToken cancellationToken = default);
+    Task<EmailSecretAccessStatus> CheckAccessAsync(string secretId, byte[] sessionMac, DateTimeOffset now, CancellationToken cancellationToken = default);
+    Task CleanupAsync(DateTimeOffset now, CancellationToken cancellationToken = default);
 }
 
 public sealed record UnlockAttemptAdmission(bool SecretExists, bool Allowed, DateTimeOffset? RetryAt = null);

@@ -7,11 +7,13 @@ public sealed record FileMetadataResponse(string Id, string Extension, string Na
 public sealed record OpenedFileResponse(string Id, string Extension, string NameNonce, string NameCiphertext, string MimeType, long Size, string Nonce, string Ciphertext);
 public sealed record CreateSecretResponse(string Id, DateTimeOffset ExpiresAt, bool PasswordProtected, string RevokeToken);
 public sealed record CreateChallengeResponse(int Version, string ChallengeId, string Nonce, int DifficultyBits, long ExpiresAt, string Signature);
-public sealed record SecretMetadataResponse(bool Exists, int ProtocolVersion, DateTimeOffset ExpiresAt, bool PasswordProtected, bool HasMessage, int FileCount, FileMetadataResponse[] Files);
+public sealed record SecretMetadataResponse(bool Exists, int ProtocolVersion, DateTimeOffset ExpiresAt, bool PasswordProtected, bool HasMessage, int FileCount, FileMetadataResponse[] Files, bool EmailVerificationRequired = false, string? MaskedEmailAddress = null);
 public sealed record OpenSecretResponse(int ProtocolVersion, MessageCiphertext? Message, OpenedFileResponse[] Files);
 public sealed record OpenFileResponse(int ProtocolVersion, OpenedFileResponse File);
 public sealed record ErrorResponse(string Code);
 public sealed record EncryptedMessageRequest(string Nonce, string Ciphertext);
 public sealed record EncryptedFileRequest(string Id, string Extension, string NameNonce, string NameCiphertext, string MimeType, long Size, string Nonce, string Ciphertext);
-public sealed record CreateSecretRequest(int ProtocolVersion, string Expiry, EncryptedMessageRequest? Message, EncryptedFileRequest[] Files, string? Password);
+public sealed record CreateSecretRequest(int ProtocolVersion, string Expiry, EncryptedMessageRequest? Message, EncryptedFileRequest[] Files, string? Password, string? EmailAddress = null);
 public sealed record UnlockSecretRequest(string Password);
+public sealed record EmailCodeRequestResponse(string Code);
+public sealed record VerifyEmailCodeRequest(string Code);
