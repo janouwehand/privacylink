@@ -149,6 +149,14 @@ h2 { font-size: 18px; margin: 0 0 26px; }
 .email-verification-form > input[type="email"]:hover { border-color: #849a92; }
 .email-verification-form > input[type="email"]:focus { border-color: #287c70; box-shadow: 0 0 0 3px rgba(74, 155, 141, .2); }
 .email-verification-form .field-note { margin: 9px 0 0; color: #625a3d; }
+.email-verification-prompt { margin-top: 24px; padding-top: 22px; border-top: 1px solid #d5d5d5; }
+.email-verification-prompt h2 { margin: 0 0 10px; }
+.email-verification-prompt > p { color: #555; line-height: 1.55; }
+.email-verification-code-form { display: grid; justify-items: start; gap: 10px; max-width: 380px; margin-top: 18px; }
+.email-verification-code-form label { margin-bottom: 0; }
+.email-verification-code-form input { max-width: 220px; letter-spacing: .18em; }
+.email-verification-code-form .primary { margin-top: 8px; }
+.email-verification-resend { margin-top: 16px; }
 .password-generator-dialog { width: min(640px, calc(100% - 32px)); max-height: min(92vh, 780px); overflow-y: auto; margin: auto; padding: 0; border: 1px solid #d8dfdc; border-top: 3px solid #4A9B8D; color: #151515; background: #fff; box-shadow: 0 18px 60px rgba(0, 0, 0, .24); }
 .password-generator-dialog::backdrop { background: rgba(17, 17, 17, .58); }
 .work-progress-dialog { width: min(500px, calc(100% - 32px)); max-height: min(80vh, 640px); margin: auto; display: none; align-items: flex-start; gap: 18px; border: 1px solid #d8dfdc; border-top: 3px solid #4A9B8D; padding: 26px; color: #151515; background: #fff; box-shadow: 0 18px 60px rgba(0, 0, 0, .24); }

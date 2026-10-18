@@ -73,6 +73,20 @@ const messagesNl = {
   temporarilyUnavailable: 'Het is druk. Probeer het over enkele ogenblikken opnieuw.',
   rateLimited: 'Je kunt deze link tijdelijk niet openen. Er zijn te veel mislukte pogingen gedaan. Wacht even en probeer het daarna opnieuw. De afzender kan de PIN controleren of via een vertrouwd kanaal een nieuwe link sturen.',
   rateLimitedCountdown: 'Je kunt deze link tijdelijk niet openen. Er zijn te veel mislukte pogingen gedaan. Probeer het opnieuw over {time}.',
+  invalidEmailCode: 'Deze code is ongeldig of verlopen. Controleer de code of vraag een nieuwe aan.',
+  emailVerificationRateLimited: 'Je hebt te vaak een code aangevraagd of ingevuld. Wacht even en probeer het opnieuw.',
+  emailVerificationRequired: 'Controleer eerst het e-mailadres om deze link te openen.',
+  emailVerificationRecipientTitle: 'Controleer je e-mailadres',
+  emailVerificationRecipientIntro: 'Met deze knop vraag je een eenmalige code aan voor {email}.',
+  emailVerificationRequestCode: 'Code aanvragen',
+  emailVerificationRequesting: 'Code aanvragen…',
+  emailVerificationCooldownHint: 'Per link en e-mailadres kan maximaal één code per 60 seconden worden aangevraagd. Dit geldt ook als je de link in een andere browser opent.',
+  emailVerificationCodeRequestInfo: 'Controleer je mailbox. Om je privacy te beschermen, meldt deze pagina niet of er een e-mail is verstuurd. Er wordt maximaal één code per minuut en vijf per uur toegestaan per link en e-mailadres, ook tussen browsers. Een ontvangen code verloopt na vijf minuten. Komt er geen code aan, probeer het later opnieuw.',
+  emailVerificationRequestNewCode: 'Nieuwe code aanvragen',
+  emailVerificationRequestNewCodeIn: 'Nieuwe code aanvragen over {time}',
+  emailVerificationCodeLabel: 'Eenmalige code',
+  emailVerificationVerifyCode: 'Code controleren',
+  emailVerificationChecking: 'Controleren…',
   waiting: 'Even wachten…',
   clipboardFailure: 'Kopiëren is niet gelukt. Selecteer en kopieer de link handmatig.',
   unsupportedFileType: 'Deze bestandstypen zijn niet toegestaan: {files}.',
@@ -151,7 +165,7 @@ const messagesNl = {
   emailVerificationStep1: 'Na het openen van de link vraagt de ontvanger een eenmalige code aan.',
   emailVerificationStep2: 'De ontvanger ziet dit e-mailadres gemaskeerd en ontvangt de code in de mailbox.',
   emailVerificationStep3: 'Na het invullen van de code kan de ontvanger het bericht lezen.',
-  emailVerificationPrivacyHint: 'Voorbeeldweergave: er wordt nog geen e-mail verstuurd.',
+  emailVerificationPrivacyHint: 'Bij het maken van de link wordt geen e-mail verstuurd. De ontvanger vraagt zelf een code aan.',
   emailVerificationSave: 'Wijzigingen opslaan',
   recipientEmail: 'E-mailadres van de ontvanger',
   emailPlaceholder: 'naam@voorbeeld.nl',
@@ -245,6 +259,8 @@ type TranslationParameters = {
   adminPageSummary: { page: number; pages: number; total: number };
   adminSortBy: { column: string; direction: string };
   emailVerificationEnabledFor: { email: string };
+  emailVerificationRecipientIntro: { email: string };
+  emailVerificationRequestNewCodeIn: { time: string };
 };
 
 export type TranslationArguments<K extends TranslationKey> =
@@ -323,6 +339,20 @@ const messagesEn = {
   temporarilyUnavailable: 'The service is busy. Please try again in a few moments.',
   rateLimited: 'You cannot open this link for now because there have been too many failed attempts. Wait a little and try again. The sender can check the PIN or send a new link through a trusted channel.',
   rateLimitedCountdown: 'You cannot open this link for now because there have been too many failed attempts. Try again in {time}.',
+  invalidEmailCode: 'This code is invalid or expired. Check it or request a new one.',
+  emailVerificationRateLimited: 'You have requested or entered a code too many times. Wait a little and try again.',
+  emailVerificationRequired: 'Verify the email address before opening this link.',
+  emailVerificationRecipientTitle: 'Verify your email address',
+  emailVerificationRecipientIntro: 'Use this button to request a one-time code for {email}.',
+  emailVerificationRequestCode: 'Request code',
+  emailVerificationRequesting: 'Requesting code…',
+  emailVerificationCooldownHint: 'At most one code can be requested every 60 seconds per link and email address. This also applies when you open the link in another browser.',
+  emailVerificationCodeRequestInfo: 'Check your inbox. To protect your privacy, this page does not tell you whether an email was sent. At most one code per minute and five per hour are allowed per link and email address, including across browsers. A received code expires after five minutes. If no code arrives, try again later.',
+  emailVerificationRequestNewCode: 'Request a new code',
+  emailVerificationRequestNewCodeIn: 'Request a new code in {time}',
+  emailVerificationCodeLabel: 'One-time code',
+  emailVerificationVerifyCode: 'Verify code',
+  emailVerificationChecking: 'Checking…',
   waiting: 'Please wait…',
   clipboardFailure: 'Copying failed. Select and copy the link manually.',
   unsupportedFileType: 'These file types are not allowed: {files}.',
@@ -401,7 +431,7 @@ const messagesEn = {
   emailVerificationStep1: 'After opening the link, the recipient requests a one-time code.',
   emailVerificationStep2: 'The recipient sees this email address masked and receives the code in that mailbox.',
   emailVerificationStep3: 'After entering the code, the recipient can read the message.',
-  emailVerificationPrivacyHint: 'Preview only: no email will be sent yet.',
+  emailVerificationPrivacyHint: 'No email is sent when the link is created. The recipient requests a code.',
   emailVerificationSave: 'Save changes',
   recipientEmail: 'Recipient email address',
   emailPlaceholder: 'name@example.com',
@@ -505,4 +535,4 @@ export type TranslatableError =
   | { key: 'unsupportedFileType'; params: { files: string } }
   | { key: 'tooManyFiles'; params: { max: number } }
   | { key: 'filesTooLarge'; params: { sizeInBytes: number } }
-  | { key: 'invalidLink' | 'unavailable' | 'failure' | 'creationRateLimited' | 'decryptFailure' | 'incorrectPassword' | 'temporarilyUnavailable' | 'rateLimited' | 'clipboardFailure' };
+  | { key: 'invalidLink' | 'unavailable' | 'failure' | 'creationRateLimited' | 'decryptFailure' | 'incorrectPassword' | 'temporarilyUnavailable' | 'rateLimited' | 'clipboardFailure' | 'invalidEmailCode' | 'emailVerificationRequired' | 'emailVerificationRateLimited' };

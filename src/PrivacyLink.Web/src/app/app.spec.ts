@@ -64,6 +64,8 @@ function createSecretApiStub() {
     createSerialized: vi.fn((_body: ArrayBuffer) => Promise.resolve({ id: 'AAAAAAAAAAAAAAAAAAAAAA', expiresAt: '2030-01-01T00:00:00.000Z', passwordProtected: false, revokeToken: 'test-revoke-token' })),
     revoke: vi.fn().mockResolvedValue(undefined),
     getMetadata: vi.fn().mockResolvedValue({ exists: true, protocolVersion: 1, expiresAt: '2030-01-01T00:00:00.000Z', passwordProtected: false, hasMessage: true, fileCount: 0, files: [] }),
+    requestEmailCode: vi.fn().mockResolvedValue({ code: 'verification_requested' }),
+    verifyEmailCode: vi.fn().mockResolvedValue(undefined),
     open: vi.fn(),
     openRaw: vi.fn(),
     unlock: vi.fn(),
@@ -152,6 +154,8 @@ describe('App', () => {
     const fixture = await renderApp();
     const create = TestBed.inject(CreateState);
     (create as unknown as { setFiles(files: File[], append?: boolean): void }).setFiles([new File(['hello'], 'hello.txt', { type: 'text/plain' })]);
+    create.setRecipientEmail('recipient@example.com');
+    create.enableEmailVerification();
 
     await create.create();
     fixture.detectChanges();
@@ -163,7 +167,31 @@ describe('App', () => {
     const request = JSON.parse(new TextDecoder().decode(body));
     expect(request.files).toHaveLength(1);
     expect(request.files[0].extension).toBe('.txt');
+    expect(request.emailAddress).toBe('recipient@example.com');
+    expect(api.requestEmailCode).not.toHaveBeenCalled();
     expect((fixture.nativeElement as HTMLElement).querySelector('h1')?.textContent).toContain('Your secure link is ready.');
+  });
+
+  it('creates an email-protected link after an address is selected', async () => {
+    const fixture = await renderApp();
+    const create = TestBed.inject(CreateState);
+    create.message.set('Protected message');
+    create.setRecipientEmail('recipient@example.com');
+    create.enableEmailVerification();
+    fixture.detectChanges();
+
+    const compiled = fixture.nativeElement as HTMLElement;
+    const button = compiled.querySelector<HTMLButtonElement>('.compose-actions .primary')!;
+    expect(button.disabled).toBe(false);
+    expect(api.create).not.toHaveBeenCalled();
+    expect(api.requestEmailCode).not.toHaveBeenCalled();
+    button.click();
+    await vi.waitFor(() => expect(api.create).toHaveBeenCalledOnce());
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(api.create).toHaveBeenCalledWith(expect.objectContaining({ emailAddress: 'recipient@example.com' }), expect.any(String));
+    expect(api.requestEmailCode).not.toHaveBeenCalled();
+    expect(compiled.querySelector('h1')?.textContent).toContain('Your secure link is ready.');
   });
 
   it('waits for an explicit unlock action and renders decrypted content as text', async () => {
@@ -213,6 +241,132 @@ describe('App', () => {
     expect(api.open).not.toHaveBeenCalled();
     expect(recipient.openedMessage()).toBe('Worker opened this message');
     expect(recipient.opened()).toBe(true);
+  });
+
+  it('sends a code only after the recipient requests it and then verifies the code before opening', async () => {
+    const id = 'AAAAAAAAAAAAAAAAAAAAAA';
+    api.getMetadata.mockResolvedValue({
+      exists: true,
+      protocolVersion: 1,
+      expiresAt: '2030-01-01T00:00:00.000Z',
+      passwordProtected: false,
+      hasMessage: true,
+      fileCount: 0,
+      files: [],
+      emailVerificationRequired: true,
+      maskedEmailAddress: 'r***@example.com'
+    });
+    const fixture = await renderApp(`/s/${id}#${'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'}`);
+
+    const compiled = fixture.nativeElement as HTMLElement;
+    expect(compiled.textContent).toContain('r***@example.com');
+    expect(compiled.textContent).toContain('This also applies when you open the link in another browser.');
+    const requestButton = compiled.querySelector<HTMLButtonElement>('[data-testid="request-email-code"]');
+    expect(requestButton).not.toBeNull();
+    expect(api.requestEmailCode).not.toHaveBeenCalled();
+    expect(api.openRaw).not.toHaveBeenCalled();
+    expect(compiled.querySelector('.card .primary')?.textContent).toContain('Request code');
+
+    requestButton!.click();
+    await vi.waitFor(() => expect(api.requestEmailCode).toHaveBeenCalledOnce());
+    expect(api.requestEmailCode).toHaveBeenCalledWith(id);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(compiled.textContent).toContain('this page does not tell you whether an email was sent');
+    const resendButton = compiled.querySelector<HTMLButtonElement>('[data-testid="request-new-email-code"]');
+    expect(resendButton).not.toBeNull();
+    expect(resendButton!.disabled).toBe(true);
+    expect(resendButton!.textContent).toContain('01:00');
+    resendButton!.click();
+    expect(api.requestEmailCode).toHaveBeenCalledOnce();
+
+    const code = compiled.querySelector<HTMLInputElement>('[data-testid="email-verification-code"]')!;
+    code.value = '123456';
+    code.dispatchEvent(new Event('input', { bubbles: true }));
+    fixture.detectChanges();
+    compiled.querySelector<HTMLFormElement>('.email-verification-code-form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(api.verifyEmailCode).toHaveBeenCalledWith(id, '123456'));
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(compiled.querySelector('.card > .primary')?.textContent).toContain('Open content');
+    expect(api.openRaw).not.toHaveBeenCalled();
+    expect(localStorage.getItem(`privacylink.email-verification.${id}`)).toBeTruthy();
+  });
+
+  it('does not apply a code request response to a different link', async () => {
+    const id = 'AAAAAAAAAAAAAAAAAAAAAA';
+    const nextId = 'AQAAAAAAAAAAAAAAAAAAAA';
+    let completeRequest!: (result: { code: string }) => void;
+    api.getMetadata.mockResolvedValue({
+      exists: true,
+      protocolVersion: 1,
+      expiresAt: '2030-01-01T00:00:00.000Z',
+      passwordProtected: false,
+      hasMessage: true,
+      fileCount: 0,
+      files: [],
+      emailVerificationRequired: true,
+      maskedEmailAddress: 'r***@example.com'
+    });
+    api.requestEmailCode.mockImplementation(() => new Promise(resolve => { completeRequest = resolve; }));
+    const fixture = await renderApp(`/s/${id}#${'A'.repeat(43)}`);
+    const recipient = fixture.debugElement.query(By.directive(RecipientPage)).injector.get(RecipientState);
+    await vi.waitFor(() => expect(recipient.metadataReady()).toBe(true));
+    (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="request-email-code"]')!.click();
+    await vi.waitFor(() => expect(api.requestEmailCode).toHaveBeenCalledOnce());
+
+    await TestBed.inject(Router).navigateByUrl(`/s/${nextId}#${'A'.repeat(43)}`);
+    await vi.waitFor(() => expect(api.getMetadata).toHaveBeenCalledTimes(2));
+    await fixture.whenStable();
+    completeRequest({ code: 'verification_requested' });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(recipient.emailCodeRequested()).toBe(false);
+    expect(recipient.emailVerified()).toBe(false);
+    expect((fixture.nativeElement as HTMLElement).querySelector('[data-testid="request-email-code"]')).not.toBeNull();
+  });
+
+  it('does not save a verification session for a link opened while verification is pending', async () => {
+    const id = 'AAAAAAAAAAAAAAAAAAAAAA';
+    const nextId = 'AQAAAAAAAAAAAAAAAAAAAA';
+    let completeVerification!: () => void;
+    api.getMetadata.mockResolvedValue({
+      exists: true,
+      protocolVersion: 1,
+      expiresAt: '2030-01-01T00:00:00.000Z',
+      passwordProtected: false,
+      hasMessage: true,
+      fileCount: 0,
+      files: [],
+      emailVerificationRequired: true,
+      maskedEmailAddress: 'r***@example.com'
+    });
+    api.verifyEmailCode.mockImplementation(() => new Promise<void>(resolve => { completeVerification = () => resolve(); }));
+    const fixture = await renderApp(`/s/${id}#${'A'.repeat(43)}`);
+    const recipient = fixture.debugElement.query(By.directive(RecipientPage)).injector.get(RecipientState);
+    await vi.waitFor(() => expect(recipient.metadataReady()).toBe(true));
+    (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('[data-testid="request-email-code"]')!.click();
+    await vi.waitFor(() => expect(api.requestEmailCode).toHaveBeenCalledOnce());
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const code = (fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>('[data-testid="email-verification-code"]')!;
+    code.value = '123456';
+    code.dispatchEvent(new Event('input', { bubbles: true }));
+    fixture.detectChanges();
+    (fixture.nativeElement as HTMLElement).querySelector<HTMLFormElement>('.email-verification-code-form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(api.verifyEmailCode).toHaveBeenCalledOnce());
+
+    await TestBed.inject(Router).navigateByUrl(`/s/${nextId}#${'A'.repeat(43)}`);
+    await vi.waitFor(() => expect(api.getMetadata).toHaveBeenCalledTimes(2));
+    await fixture.whenStable();
+    completeVerification();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(recipient.emailVerified()).toBe(false);
+    expect(localStorage.getItem(`privacylink.email-verification.${id}`)).toBeNull();
+    expect(localStorage.getItem(`privacylink.email-verification.${nextId}`)).toBeNull();
   });
 
   it('keeps metadata files visible when the unprotected open response only contains the message', async () => {

@@ -344,7 +344,6 @@ export class CreateState {
 
   async create(skipConfirmation = false): Promise<void> {
     if (this.busy()) return;
-    if (this.emailVerificationEnabled()) return;
     this.clearError();
     if (!this.message().trim() && this.selectedFiles().length === 0) { this.emptyMessageDialogOpen.set(true); return; }
     if (this.messageCharacters() > MAX_MESSAGE_CHARACTERS || this.messageBytes() > MAX_MESSAGE_BYTES) {
@@ -366,6 +365,7 @@ export class CreateState {
         protocolVersion: 1,
         expiry: this.expiry(),
         message: this.message().trim() ? encrypted.message : null,
+        ...(this.emailVerificationEnabled() ? { emailAddress: this.recipientEmail() } : {}),
         ...(this.password() ? { password: await derivePasswordToken(this.password(), encrypted.clientKey) } : {})
       } as const;
       const created = filesToEncrypt.length
@@ -402,7 +402,7 @@ export class CreateState {
   }
 
   private async createFilesWithWorker(
-    request: { protocolVersion: 1; expiry: Expiry; message: { nonce: string; ciphertext: string } | null; password?: string },
+    request: { protocolVersion: 1; expiry: Expiry; message: { nonce: string; ciphertext: string } | null; password?: string; emailAddress?: string },
     files: File[],
     clientKey: Uint8Array
   ): Promise<{ id: string; expiresAt: string; passwordProtected: boolean; revokeToken: string }> {

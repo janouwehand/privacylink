@@ -45,7 +45,7 @@
       </div>
     </div>
     @if (create.error().length) { <p class="error" role="alert">{{ create.errorText() }}</p> }
-    <div class="compose-actions"><div class="compose-action-stack"><button class="primary" type="button" (click)="create.create()" [disabled]="create.busy() || create.emailVerificationEnabled()">{{ create.busy() ? language.t('creating') : language.t('create') }}</button><div class="compose-status-slot" role="status" aria-live="polite" aria-atomic="true">@if (create.proofCalculating() && !create.busy()) { <span class="compose-status">{{ language.t('proofPreparing') }}</span> }</div></div></div>
+    <div class="compose-actions"><div class="compose-action-stack"><button class="primary" type="button" (click)="create.create()" [disabled]="create.busy()">{{ create.busy() ? language.t('creating') : language.t('create') }}</button><div class="compose-status-slot" role="status" aria-live="polite" aria-atomic="true">@if (create.proofCalculating() && !create.busy()) { <span class="compose-status">{{ language.t('proofPreparing') }}</span> }</div></div></div>
   </section>
   <dialog #emailVerificationDialog class="email-verification-dialog" aria-labelledby="email-verification-title" aria-describedby="email-verification-description">
     <div class="email-verification-dialog-header"><div><div class="eyebrow">{{ language.t('emailVerificationEyebrow') }}</div><h2 id="email-verification-title">{{ language.t('emailVerificationTitle') }}</h2></div><button class="generator-close" type="button" (click)="closeEmailVerificationDialog()" [attr.aria-label]="language.t('close')">×</button></div>

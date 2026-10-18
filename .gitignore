@@ -16,3 +16,4 @@
 artifacts/
 data/
 deployment-plan.md
+.tmp-*

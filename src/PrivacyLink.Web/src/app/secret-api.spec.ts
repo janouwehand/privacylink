@@ -86,4 +86,32 @@ describe('SecretApi unlock retries', () => {
     await expect(new SecretApi().getCreateChallenge()).resolves.toEqual(challenge);
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/secrets/create-challenge', expect.objectContaining({ cache: 'no-store' }));
   });
+
+  it('requests an email code only through the explicit verification endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: 'verification_requested' }), { status: 202 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(new SecretApi().requestEmailCode('secret/id')).resolves.toEqual({ code: 'verification_requested' });
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/secrets/secret%2Fid/email-verification/request', expect.objectContaining({
+      method: 'POST',
+      credentials: 'same-origin',
+      cache: 'no-store'
+    }));
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBeUndefined();
+  });
+
+  it('submits the one-time code and accepts the verification session cookie', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(new SecretApi().verifyEmailCode('secret/id', '123456')).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/secrets/secret%2Fid/email-verification/verify', expect.objectContaining({
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: '123456' })
+    }));
+  });
 });
