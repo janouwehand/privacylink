@@ -30,5 +30,8 @@
     "prettier": "^3.8.1",
     "typescript": "~6.0.2",
     "vitest": "^4.1.12"
+  },
+  "overrides": {
+    "vite": "^8.3.3"
   }
 }
