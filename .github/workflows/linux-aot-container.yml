@@ -49,6 +49,9 @@ jobs:
       PRIVACYLINK_ADMIN_PASSWORD: privacylink-ci-temporary-admin-password-only-for-ci
       PRIVACYLINK_ALLOWED_HOSTS: localhost;127.0.0.1;privacylinkslim
       PRIVACYLINK_HTTP_PORT: "18080"
+      # Compose requires mail settings, but this smoke test never sends email.
+      PRIVACYLINK_RESEND_API_KEY: ci-not-used
+      PRIVACYLINK_RESEND_FROM_ADDRESS: ci@example.invalid
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -60,6 +63,7 @@ jobs:
         run: |
           echo "PRIVACYLINK_AUDIT_HASH_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
           echo "PRIVACYLINK_CREATE_PROOF_HMAC_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+          echo "PRIVACYLINK_EMAIL_VERIFICATION_HMAC_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
           echo "PRIVACYLINK_CREATE_PROOF_DIFFICULTY_BITS=1" >> "$GITHUB_ENV"
       - name: Start production stack and wait for API readiness
         run: docker compose --project-name privacylink-ci up --build --detach --wait --wait-timeout 180
