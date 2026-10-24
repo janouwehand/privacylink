@@ -1,4 +1,4 @@
-import { InjectionToken, Injectable, computed, inject, signal } from '@angular/core';
+import { DestroyRef, InjectionToken, Injectable, computed, inject, signal } from '@angular/core';
 import { argon2id } from 'hash-wasm';
 
 export type SecretHistoryEntry = {
@@ -28,6 +28,7 @@ export const SECRET_HISTORY_STORAGE = new InjectionToken<SecretHistoryStorage>('
 export type HistoryVaultError = 'tooShort' | 'failed' | 'incorrect' | 'storage';
 
 const CIPHERTEXT_KEY = 'privacylink.secret-history.v3';
+const VAULT_LOCK_NAME = 'privacylink:sender-history:v3';
 const LEGACY_KEYS = [
   'privacylink.secret-history.v1',
   'privacylink.secret-history.v2',
@@ -58,13 +59,24 @@ const VAULT_CHECK_TEXT = 'PrivacyLink sender history vault check v3';
 @Injectable({ providedIn: 'root' })
 export class SecretHistoryStore {
   private readonly storage = inject(SECRET_HISTORY_STORAGE);
+  private readonly destroyRef = inject(DestroyRef);
   private readonly mutableEntries = signal<SecretHistoryEntry[]>([]);
   private readonly vaultPresent = signal(this.readVaultPresence());
+  private vaultIdentity = this.readVaultIdentity();
   private key: CryptoKey | undefined;
   private kdf: KdfParameters | undefined;
   private expiryCleanupTimeout: ReturnType<typeof setTimeout> | undefined;
   private vaultGeneration = 0;
   private mutationQueue: Promise<void> = Promise.resolve();
+  private readonly onStorageChange = (event: StorageEvent): void => {
+    if (event.key !== CIPHERTEXT_KEY && event.key !== null) return;
+    const raw = this.readVaultValue();
+    const nextIdentity = raw === null ? undefined : this.parseVaultIdentity(raw);
+    const present = raw !== null;
+    if (nextIdentity === this.vaultIdentity && present === this.vaultPresent()) return;
+    this.invalidateForExternalVaultChange(raw);
+    this.scheduleExpiryCleanup();
+  };
 
   readonly entries = this.mutableEntries.asReadonly();
   readonly enabled = computed(() => this.vaultPresent());
@@ -75,8 +87,12 @@ export class SecretHistoryStore {
   readonly error = signal<HistoryVaultError | null>(null);
 
   constructor() {
+    if (typeof window !== 'undefined') {
+      window.addEventListener('storage', this.onStorageChange);
+      this.destroyRef.onDestroy(() => window.removeEventListener('storage', this.onStorageChange));
+    }
     this.retryLegacyCleanup();
-    this.pruneExpiredCiphertextWhileLocked();
+    void this.pruneExpiredCiphertextWhileLocked();
     this.scheduleExpiryCleanup();
   }
 
@@ -87,24 +103,25 @@ export class SecretHistoryStore {
       this.error.set('tooShort');
       return false;
     }
+    const generation = ++this.vaultGeneration;
 
     try {
       const kdf = createKdfParameters();
       const key = await deriveVaultKey(passphrase, kdf);
       const envelope = await encryptEntries([], key, kdf);
-      try {
-        this.storage.setItem(CIPHERTEXT_KEY, JSON.stringify(envelope));
-      } catch {
-        throw new HistoryVaultFailure('storage');
-      }
-      this.vaultPresent.set(true);
-      this.kdf = kdf;
-      this.key = key;
-      this.mutableEntries.set([]);
-      this.unlocked.set(true);
-      this.saveFailed.set(!this.retryLegacyCleanup());
-      this.scheduleExpiryCleanup();
-      return true;
+      return await this.withVaultLock(() => {
+        if (this.vaultGeneration !== generation) return false;
+        const current = this.storage.getItem(CIPHERTEXT_KEY);
+        if (current !== null) {
+          this.invalidateForExternalVaultChange(current);
+          throw new HistoryVaultFailure('storage');
+        }
+        this.writeVaultEnvelope(envelope);
+        this.setUnlockedVault(envelope, key, []);
+        this.saveFailed.set(!this.retryLegacyCleanup());
+        this.scheduleExpiryCleanup();
+        return true;
+      });
     } catch (error) {
       this.setFailure(error);
       return false;
@@ -114,20 +131,55 @@ export class SecretHistoryStore {
   async unlock(passphrase: string): Promise<boolean> {
     this.error.set(null);
     if (!this.enabled()) return false;
+    const generation = this.vaultGeneration;
     try {
       const rawEnvelope = this.storage.getItem(CIPHERTEXT_KEY);
       if (!rawEnvelope) throw new HistoryVaultFailure('incorrect');
       const envelope = parseEnvelope(rawEnvelope);
+      const identity = getVaultIdentity(envelope);
       const key = await deriveVaultKey(passphrase, envelope.kdf);
       const entries = await decryptEntries(envelope, key);
       const active = entries.filter(entry => isUnexpired(entry));
-      const cleanupSaved = active.length === entries.length || await this.persist(active, key, envelope.kdf);
-      this.kdf = envelope.kdf;
-      this.key = key;
-      this.mutableEntries.set(active);
-      this.unlocked.set(true);
-      this.saveFailed.set(!cleanupSaved || this.legacyCleanupFailed());
-      this.scheduleExpiryCleanup();
+      const cleanedEnvelope = active.length === entries.length ? undefined : await encryptEntries(active, key, envelope.kdf);
+      if (!cleanedEnvelope) {
+        const current = this.storage.getItem(CIPHERTEXT_KEY);
+        const currentIdentity = current === null ? undefined : this.parseVaultIdentity(current);
+        if (generation !== this.vaultGeneration) return false;
+        if (currentIdentity !== identity) {
+          this.invalidateForExternalVaultChange(current);
+          return false;
+        }
+        this.finishUnlock(envelope, key, active, true);
+        return true;
+      }
+
+      try {
+        const saved = await this.withVaultLock(() => {
+          if (generation !== this.vaultGeneration) return false;
+          const current = this.storage.getItem(CIPHERTEXT_KEY);
+          const currentIdentity = current === null ? undefined : this.parseVaultIdentity(current);
+          if (currentIdentity !== identity) {
+            this.invalidateForExternalVaultChange(current);
+            return false;
+          }
+          try { this.writeVaultEnvelope(cleanedEnvelope); }
+          catch { return null; }
+          this.finishUnlock(cleanedEnvelope, key, active, true);
+          return true;
+        });
+        if (saved !== null) return saved;
+      } catch {
+        // A lock failure must not block reading the vault; skip the optional expiry write.
+      }
+
+      const current = this.storage.getItem(CIPHERTEXT_KEY);
+      const currentIdentity = current === null ? undefined : this.parseVaultIdentity(current);
+      if (generation !== this.vaultGeneration) return false;
+      if (currentIdentity !== identity) {
+        this.invalidateForExternalVaultChange(current);
+        return false;
+      }
+      this.finishUnlock(envelope, key, active, false);
       return true;
     } catch (error) {
       this.setFailure(error instanceof HistoryVaultFailure ? error : new HistoryVaultFailure('incorrect'));
@@ -216,19 +268,17 @@ export class SecretHistoryStore {
       const kdf = createKdfParameters();
       const key = await deriveVaultKey(passphrase, kdf);
       const envelope = await encryptEntries([], key, kdf);
-      if (generation !== this.vaultGeneration) return false;
-      // Invalidate mutations that began while the replacement vault was being prepared.
-      this.vaultGeneration++;
-      this.storage.setItem(CIPHERTEXT_KEY, JSON.stringify(envelope));
-      this.vaultPresent.set(true);
-      this.kdf = kdf;
-      this.key = key;
-      this.mutableEntries.set([]);
-      this.unlocked.set(true);
-      const cleanupSaved = this.retryLegacyCleanup();
-      this.saveFailed.set(!cleanupSaved);
-      this.scheduleExpiryCleanup();
-      return true;
+      return await this.withVaultLock(() => {
+        if (generation !== this.vaultGeneration) return false;
+        // Invalidate mutations that began while the replacement vault was being prepared.
+        this.vaultGeneration++;
+        this.writeVaultEnvelope(envelope);
+        this.setUnlockedVault(envelope, key, []);
+        const cleanupSaved = this.retryLegacyCleanup();
+        this.saveFailed.set(!cleanupSaved);
+        this.scheduleExpiryCleanup();
+        return true;
+      });
     } catch (error) {
       this.setFailure(error);
       return false;
@@ -236,20 +286,17 @@ export class SecretHistoryStore {
   }
 
   async disable(): Promise<boolean> {
-    this.vaultGeneration++;
+    const generation = ++this.vaultGeneration;
     try {
-      this.storage.removeItem(CIPHERTEXT_KEY);
-      for (const key of LEGACY_KEYS) this.storage.removeItem(key);
-      this.vaultPresent.set(false);
-      this.kdf = undefined;
-      this.key = undefined;
-      this.unlocked.set(false);
-      this.mutableEntries.set([]);
-      this.legacyCleanupFailed.set(false);
-      this.saveFailed.set(false);
-      if (this.expiryCleanupTimeout) clearTimeout(this.expiryCleanupTimeout);
-      this.expiryCleanupTimeout = undefined;
-      return true;
+      return await this.withVaultLock(() => {
+        if (generation !== this.vaultGeneration) return false;
+        this.storage.removeItem(CIPHERTEXT_KEY);
+        for (const key of LEGACY_KEYS) this.storage.removeItem(key);
+        this.clearUnlockedVault(false);
+        this.legacyCleanupFailed.set(false);
+        this.saveFailed.set(false);
+        return true;
+      });
     } catch {
       this.saveFailed.set(true);
       this.error.set('storage');
@@ -260,6 +307,60 @@ export class SecretHistoryStore {
   private readVaultPresence(): boolean {
     try { return this.storage.getItem(CIPHERTEXT_KEY) !== null; }
     catch { return false; }
+  }
+
+  private readVaultValue(): string | null {
+    try { return this.storage.getItem(CIPHERTEXT_KEY); }
+    catch { return null; }
+  }
+
+  private readVaultIdentity(): string | undefined {
+    const raw = this.readVaultValue();
+    return raw === null ? undefined : this.parseVaultIdentity(raw);
+  }
+
+  private parseVaultIdentity(raw: string): string | undefined {
+    try { return getVaultIdentity(parseEnvelope(raw)); }
+    catch { return undefined; }
+  }
+
+  private invalidateForExternalVaultChange(raw: string | null): void {
+    this.vaultGeneration++;
+    this.vaultIdentity = raw === null ? undefined : this.parseVaultIdentity(raw);
+    this.vaultPresent.set(raw !== null);
+    this.key = undefined;
+    this.kdf = undefined;
+    this.unlocked.set(false);
+    this.mutableEntries.set([]);
+    this.error.set(null);
+    if (this.expiryCleanupTimeout) clearTimeout(this.expiryCleanupTimeout);
+    this.expiryCleanupTimeout = undefined;
+  }
+
+  private setUnlockedVault(envelope: CiphertextEnvelope, key: CryptoKey, entries: SecretHistoryEntry[]): void {
+    this.vaultIdentity = getVaultIdentity(envelope);
+    this.vaultPresent.set(true);
+    this.kdf = envelope.kdf;
+    this.key = key;
+    this.mutableEntries.set(entries);
+    this.unlocked.set(true);
+  }
+
+  private finishUnlock(envelope: CiphertextEnvelope, key: CryptoKey, entries: SecretHistoryEntry[], cleanupSaved: boolean): void {
+    this.setUnlockedVault(envelope, key, entries);
+    this.saveFailed.set(!cleanupSaved || this.legacyCleanupFailed());
+    this.scheduleExpiryCleanup();
+  }
+
+  private clearUnlockedVault(present: boolean): void {
+    this.vaultIdentity = present ? this.readVaultIdentity() : undefined;
+    this.vaultPresent.set(present);
+    this.kdf = undefined;
+    this.key = undefined;
+    this.unlocked.set(false);
+    this.mutableEntries.set([]);
+    if (this.expiryCleanupTimeout) clearTimeout(this.expiryCleanupTimeout);
+    this.expiryCleanupTimeout = undefined;
   }
 
   private activeEntries(): SecretHistoryEntry[] {
@@ -277,8 +378,7 @@ export class SecretHistoryStore {
     this.expiryCleanupTimeout = setTimeout(() => {
       this.expiryCleanupTimeout = undefined;
       if (!this.unlocked()) {
-        const pruned = this.pruneExpiredCiphertextWhileLocked();
-        this.scheduleExpiryCleanup(pruned ? 0 : 60_000);
+        void this.pruneExpiredCiphertextWhileLocked().then(pruned => this.scheduleExpiryCleanup(pruned ? 0 : 60_000));
         return;
       }
       const hadExpiredEntries = this.mutableEntries().some(entry => !isUnexpired(entry));
@@ -297,15 +397,21 @@ export class SecretHistoryStore {
     }
   }
 
-  private pruneExpiredCiphertextWhileLocked(): boolean {
+  private async pruneExpiredCiphertextWhileLocked(): Promise<boolean> {
     try {
       const raw = this.storage.getItem(CIPHERTEXT_KEY);
       if (!raw) return true;
       const envelope = parseEnvelope(raw);
-      const active = envelope.entries.filter(entry => Date.parse(entry.expiresAt) > Date.now());
-      if (active.length === envelope.entries.length) return true;
-      this.storage.setItem(CIPHERTEXT_KEY, JSON.stringify({ ...envelope, entries: active } satisfies CiphertextEnvelope));
-      return true;
+      if (envelope.entries.every(entry => Date.parse(entry.expiresAt) > Date.now())) return true;
+      return await this.withVaultLock(() => {
+        const current = this.storage.getItem(CIPHERTEXT_KEY);
+        if (!current) return true;
+        const latestEnvelope = parseEnvelope(current);
+        const active = latestEnvelope.entries.filter(entry => Date.parse(entry.expiresAt) > Date.now());
+        if (active.length === latestEnvelope.entries.length) return true;
+        this.writeVaultEnvelope({ ...latestEnvelope, entries: active } satisfies CiphertextEnvelope);
+        return true;
+      });
     } catch {
       this.saveFailed.set(true);
       return false;
@@ -319,20 +425,43 @@ export class SecretHistoryStore {
   }
 
   private isCurrentUnlockedVault(generation: number): boolean {
-    return generation === this.vaultGeneration && this.unlocked() && !!this.key && !!this.kdf;
+    return generation === this.vaultGeneration && this.unlocked() && !!this.key && !!this.kdf && !!this.vaultIdentity;
   }
 
-  private async persist(entries: SecretHistoryEntry[], key: CryptoKey, kdf: KdfParameters, generation?: number): Promise<boolean> {
+  private async persist(entries: SecretHistoryEntry[], key: CryptoKey, kdf: KdfParameters, generation: number): Promise<boolean> {
+    const expectedIdentity = this.vaultIdentity;
+    if (!expectedIdentity) return false;
     try {
       const envelope = await encryptEntries(entries, key, kdf);
-      if (generation !== undefined && generation !== this.vaultGeneration) return false;
-      this.storage.setItem(CIPHERTEXT_KEY, JSON.stringify(envelope));
-      this.saveFailed.set(this.legacyCleanupFailed());
-      return true;
+      return await this.withVaultLock(() => {
+        if (generation !== this.vaultGeneration || expectedIdentity !== this.vaultIdentity) return false;
+        const raw = this.storage.getItem(CIPHERTEXT_KEY);
+        const currentIdentity = raw === null ? undefined : this.parseVaultIdentity(raw);
+        if (currentIdentity !== expectedIdentity) {
+          this.invalidateForExternalVaultChange(raw);
+          return false;
+        }
+        this.writeVaultEnvelope(envelope);
+        this.vaultIdentity = getVaultIdentity(envelope);
+        this.saveFailed.set(this.legacyCleanupFailed());
+        return true;
+      });
     } catch {
       this.saveFailed.set(true);
       return false;
     }
+  }
+
+  private withVaultLock<T>(operation: () => T | Promise<T>): Promise<T> {
+    if (typeof navigator === 'undefined' || !navigator.locks) {
+      return Promise.reject(new HistoryVaultFailure('storage'));
+    }
+    return navigator.locks.request(VAULT_LOCK_NAME, { mode: 'exclusive' }, () => operation());
+  }
+
+  private writeVaultEnvelope(envelope: CiphertextEnvelope): void {
+    try { this.storage.setItem(CIPHERTEXT_KEY, JSON.stringify(envelope)); }
+    catch { throw new HistoryVaultFailure('storage'); }
   }
 
   private setFailure(error: unknown): void {
@@ -491,6 +620,11 @@ function isHistoryEntry(item: unknown): item is SecretHistoryEntry {
 }
 
 function isUnexpired(entry: SecretHistoryEntry): boolean { return Date.parse(entry.expiresAt) > Date.now(); }
+
+function getVaultIdentity(envelope: CiphertextEnvelope): string {
+  const { algorithm, version, memoryKiB, iterations, parallelism, salt } = envelope.kdf;
+  return JSON.stringify([algorithm, version, memoryKiB, iterations, parallelism, salt]);
+}
 
 function encodeBase64Url(bytes: Uint8Array): string {
   let binary = '';

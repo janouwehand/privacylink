@@ -1,6 +1,8 @@
-import { TestBed } from '@angular/core/testing';
+import { createEnvironmentInjector, EnvironmentInjector } from '@angular/core';
+import { TestBed as AngularTestBed } from '@angular/core/testing';
 import { vi } from 'vitest';
 import { SECRET_HISTORY_STORAGE, SecretHistoryStorage, SecretHistoryStore } from './secret-history-store';
+import { installTestWebLocks } from '../../test-utils/web-locks';
 
 const LEGACY_KEY = 'privacylink.secret-history.v1';
 const OLD_CIPHERTEXT_KEY = 'privacylink.secret-history.v2';
@@ -22,16 +24,39 @@ function entry() {
 describe('SecretHistoryStore', () => {
   let values: Map<string, string>;
   let storage: SecretHistoryStorage;
+  let restoreWebLocks: (() => void) | undefined;
+  let childInjectors: EnvironmentInjector[] = [];
 
   async function createStore(): Promise<SecretHistoryStore> {
-    TestBed.resetTestingModule();
-    await TestBed.configureTestingModule({
+    AngularTestBed.resetTestingModule();
+    await AngularTestBed.configureTestingModule({
       providers: [{ provide: SECRET_HISTORY_STORAGE, useValue: storage }]
     }).compileComponents();
-    return TestBed.inject(SecretHistoryStore);
+    return AngularTestBed.inject(SecretHistoryStore);
+  }
+
+  async function createIndependentStores(count: number): Promise<SecretHistoryStore[]> {
+    AngularTestBed.resetTestingModule();
+    await AngularTestBed.configureTestingModule({
+      providers: [{ provide: SECRET_HISTORY_STORAGE, useValue: storage }]
+    }).compileComponents();
+    const parent = AngularTestBed.inject(EnvironmentInjector);
+    return Array.from({ length: count }, () => {
+      const injector = createEnvironmentInjector([SecretHistoryStore], parent);
+      childInjectors.push(injector);
+      return injector.get(SecretHistoryStore);
+    });
+  }
+
+  function dispatchStorageEvent(): void {
+    window.dispatchEvent(new StorageEvent('storage', {
+      key: CIPHERTEXT_KEY,
+      newValue: values.get(CIPHERTEXT_KEY) ?? null
+    }));
   }
 
   beforeEach(() => {
+    restoreWebLocks = installTestWebLocks();
     values = new Map();
     storage = {
       getItem: key => values.get(key) ?? null,
@@ -40,7 +65,12 @@ describe('SecretHistoryStore', () => {
     };
   });
 
-  afterEach(() => TestBed.resetTestingModule());
+  afterEach(() => {
+    restoreWebLocks?.();
+    for (const injector of childInjectors) injector.destroy();
+    childInjectors = [];
+    AngularTestBed.resetTestingModule();
+  });
 
   it('keeps sender history disabled and writes nothing by default', async () => {
     const store = await createStore();
@@ -174,5 +204,42 @@ describe('SecretHistoryStore', () => {
     expect(store.entries()).toEqual([]);
     expect(values.has(CIPHERTEXT_KEY)).toBe(false);
     expect(values.has(OLD_CREDENTIAL_KEY)).toBe(false);
+  });
+
+  it.each(['reset', 'disable'] as const)('rejects stale writes when another tab %s the vault', async action => {
+    const [staleWriter, otherTab, eventOnlyTab] = await createIndependentStores(3);
+    expect(await staleWriter.enable(PASSPHRASE)).toBe(true);
+    expect(await staleWriter.add(entry())).toBe(true);
+    dispatchStorageEvent();
+    expect(await otherTab.unlock(PASSPHRASE)).toBe(true);
+    expect(await eventOnlyTab.unlock(PASSPHRASE)).toBe(true);
+
+    if (action === 'reset') {
+      const oldSalt = JSON.parse(values.get(CIPHERTEXT_KEY)!).kdf.salt;
+      const replacementPassphrase = 'different violet river meadow';
+      expect(await otherTab.reset(replacementPassphrase)).toBe(true);
+      const replacement = values.get(CIPHERTEXT_KEY)!;
+      expect(JSON.parse(replacement).kdf.salt).not.toBe(oldSalt);
+
+      // The persisted identity check protects the gap before the browser dispatches `storage`.
+      expect(await staleWriter.add({ ...entry(), id: 'stale-after-reset' })).toBe(false);
+      expect(values.get(CIPHERTEXT_KEY)).toBe(replacement);
+
+      dispatchStorageEvent();
+      expect(eventOnlyTab.unlocked()).toBe(false);
+      expect(eventOnlyTab.entries()).toEqual([]);
+      expect(await eventOnlyTab.add({ ...entry(), id: 'stale-after-event' })).toBe(false);
+      expect(values.get(CIPHERTEXT_KEY)).toBe(replacement);
+      expect(await eventOnlyTab.unlock(replacementPassphrase)).toBe(true);
+      expect(eventOnlyTab.entries()).toEqual([]);
+    } else {
+      expect(await otherTab.disable()).toBe(true);
+      dispatchStorageEvent();
+      expect(staleWriter.enabled()).toBe(false);
+      expect(staleWriter.unlocked()).toBe(false);
+      expect(staleWriter.entries()).toEqual([]);
+      expect(await staleWriter.add({ ...entry(), id: 'stale-after-disable' })).toBe(false);
+      expect(values.has(CIPHERTEXT_KEY)).toBe(false);
+    }
   });
 });

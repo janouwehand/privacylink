@@ -12,6 +12,7 @@ import { RecipientState } from './recipient/recipient-state';
 import { RecipientPage } from './recipient/recipient-page';
 import { SecretApi } from './secret-api';
 import { SecretHistoryStore } from './secret-history-store';
+import { installTestWebLocks } from '../../test-utils/web-locks';
 import { decodeCanonical, decryptFile, decryptFileName, decryptMessage, encryptFile, encryptMessage } from './secret-crypto';
 
 class InlineCryptoWorker extends EventTarget {
@@ -79,8 +80,10 @@ function createSecretApiStub() {
 describe('App', () => {
   let api: ReturnType<typeof createSecretApiStub>;
   let addedDialogMethods = false;
+  let restoreWebLocks: (() => void) | undefined;
 
   beforeEach(async () => {
+    restoreWebLocks = installTestWebLocks();
     addedDialogMethods = typeof HTMLDialogElement.prototype.showModal !== 'function';
     if (addedDialogMethods) {
       Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.setAttribute('open', ''); } });
@@ -100,6 +103,7 @@ describe('App', () => {
   });
 
   afterEach(() => {
+    restoreWebLocks?.();
     if (addedDialogMethods) {
       Reflect.deleteProperty(HTMLDialogElement.prototype, 'showModal');
       Reflect.deleteProperty(HTMLDialogElement.prototype, 'close');
