@@ -269,6 +269,8 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         Assert.Contains("base-uri 'self'", contentSecurityPolicy);
         Assert.Contains("frame-ancestors 'none'", contentSecurityPolicy);
         Assert.Contains("object-src 'none'", contentSecurityPolicy);
+        Assert.Contains("script-src 'self' 'wasm-unsafe-eval'", contentSecurityPolicy);
+        Assert.DoesNotContain("'unsafe-eval'", contentSecurityPolicy);
         Assert.Equal("DENY", response.Headers.GetValues("X-Frame-Options").Single());
         Assert.Equal("same-origin", response.Headers.GetValues("Cross-Origin-Resource-Policy").Single());
         Assert.Equal("no-referrer", response.Headers.GetValues("Referrer-Policy").Single());

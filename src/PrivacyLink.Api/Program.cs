@@ -151,7 +151,7 @@ app.Use(async (context, next) =>
     context.Response.Headers.XContentTypeOptions = "nosniff";
     // Keep the server policy aligned with the Angular document policy. The SPA
     // needs same-origin scripts/styles/assets and its root base href to load.
-    context.Response.Headers["Content-Security-Policy"] = "default-src 'self'; base-uri 'self'; form-action 'self'; object-src 'none'; frame-ancestors 'none'; img-src 'self' data:; connect-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'";
+    context.Response.Headers["Content-Security-Policy"] = "default-src 'self'; base-uri 'self'; form-action 'self'; object-src 'none'; frame-ancestors 'none'; img-src 'self' data:; connect-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'";
     context.Response.Headers["X-Frame-Options"] = "DENY";
     context.Response.Headers["Cross-Origin-Resource-Policy"] = "same-origin";
     context.Response.Headers["Cross-Origin-Opener-Policy"] = "same-origin";
