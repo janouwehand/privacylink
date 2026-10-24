@@ -42,7 +42,7 @@ body { margin: 0; min-width: 320px; }
 .language { display: flex; height: 38px; background: #e9f1ee; padding: 3px; gap: 2px; }
 .language button { border: 0; background: transparent; color: #526b64; font-weight: 700; padding: 7px 10px; cursor: pointer; }
 .language button.active { background: #16333A; color: #fff; }
-.history-nav-link { display: inline-flex; align-items: center; gap: 9px; width: fit-content; height: 38px; min-height: 38px; padding: 6px 12px; border: 1px solid #aaa; background: #fff; color: #151515; font-size: 13px; font-weight: 700; text-decoration: none; transition: background .16s ease, color .16s ease, border-color .16s ease; }
+.history-nav-link { display: inline-flex; align-items: center; gap: 9px; width: fit-content; height: 38px; min-height: 38px; padding: 6px 12px; border: 1px solid #aaa; background: #fff; color: #151515; font-family: inherit; font-size: 13px; font-weight: 700; text-decoration: none; cursor: pointer; transition: background .16s ease, color .16s ease, border-color .16s ease; }
 .history-nav-link:hover, .history-nav-link:focus-visible { border-color: #16333A; background: #16333A; color: #fff; }
 .history-nav-link svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
 .history-nav-count { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; background: #eee; color: #151515; font-size: 11px; font-weight: 700; }
@@ -62,7 +62,7 @@ h2 { font-size: 18px; margin: 0 0 26px; }
 .security-summary { margin: 0 0 28px; color: #666; font-size: 14px; line-height: 1.6; }
 .text-link { padding: 0; border: 0; background: none; color: #426b62; font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; }
 .text-link:hover, .text-link:focus-visible { color: #111; }
-.compose-actions { display: flex; align-items: center; justify-content: flex-start; margin-top: 24px; padding-top: 22px; border-top: 1px solid #d5d5d5; }
+.compose-actions { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 24px; padding-top: 22px; border-top: 1px solid #d5d5d5; }
 .compose-action-stack { display: grid; justify-items: start; gap: 6px; }
 .compose-status-slot { display: flex; align-items: flex-start; min-height: 18px; }
 .compose-status { color: #777; font-size: 12px; line-height: 18px; }
@@ -134,6 +134,7 @@ h2 { font-size: 18px; margin: 0 0 26px; }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .card > .primary, .card > .actions { margin-top: 24px; }
 .error { color: #8f1f2d; background: #fff4f4; border: 1px solid #e4bfc3; padding: 12px; border-radius: 0; font-size: 14px; }
+.info { color: #285f74; background: #f1f8fb; border: 1px solid #b6d4df; padding: 12px; border-radius: 0; font-size: 14px; }
 .password-copy-dialog { width: min(520px, calc(100% - 32px)); border: 1px solid #111; border-top: 3px solid #111; padding: 28px; color: #151515; box-shadow: 0 18px 60px rgba(0, 0, 0, .24); }
 .password-copy-dialog::backdrop { background: rgba(17, 17, 17, .48); }
 .email-verification-dialog { width: min(560px, calc(100% - 32px)); max-height: min(90vh, 760px); overflow-y: auto; margin: auto; padding: 28px; border: 1px solid #d8dfdc; border-top: 3px solid #4A9B8D; color: #151515; background: #fff; box-shadow: 0 18px 60px rgba(0, 0, 0, .24); }
@@ -219,6 +220,17 @@ h2 { font-size: 18px; margin: 0 0 26px; }
 .password-copy-dialog p { margin: 0; color: #555; font-size: 14px; line-height: 1.6; }
 .history-page-card { width: 100%; }
 .history-privacy-note { margin: 14px 0 22px !important; padding: 11px 13px; border: 1px solid #d9d2b5; background: #fbf8ec; color: #625a3d !important; font-size: 12px !important; }
+.history-vault-notice { margin-top: 20px; padding: 16px; border: 1px solid #d7dfdc; background: #f7faf9; }
+.history-vault-notice p { max-width: 760px; margin: 10px 0 14px; color: #555; font-size: 13px; line-height: 1.6; }
+.history-passphrase-fields { display: grid; gap: 8px; margin: 18px 0 0; }
+.history-passphrase-fields label, .history-vault-notice label { color: #263b36; font-size: 13px; font-weight: 700; }
+.history-passphrase-fields input, .history-vault-notice input { display: block; width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid #bdcbc6; border-radius: 0; background: #fff; color: #151515; font: inherit; outline: none; }
+.history-passphrase-fields input:focus, .history-vault-notice input:focus { border-color: #287c70; box-shadow: 0 0 0 3px rgba(74, 155, 141, .2); }
+.history-passphrase-fields .field-note { margin: 0 0 8px; }
+.history-passphrase-fields .error { margin: 0; }
+.history-reset-link { margin: 16px 0 0; }
+.history-reset-link .subtle-link { min-height: 0; font-size: 12px; }
+.history-vault-actions { display: flex; align-items: center; justify-content: flex-end; gap: 14px; margin-top: 20px; padding-top: 16px; border-top: 1px solid #e5e5e5; }
 .history-empty { display: grid; gap: 6px; padding: 36px 18px; border: 1px dashed #aaa; color: #555; text-align: center; }
 .history-empty strong { color: #151515; font-size: 15px; }
 .history-empty-action { display: inline-flex; justify-self: center; margin-top: 12px; text-decoration: none; }
