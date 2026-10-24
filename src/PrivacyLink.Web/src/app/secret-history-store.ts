@@ -63,6 +63,8 @@ export class SecretHistoryStore {
   private key: CryptoKey | undefined;
   private kdf: KdfParameters | undefined;
   private expiryCleanupTimeout: ReturnType<typeof setTimeout> | undefined;
+  private vaultGeneration = 0;
+  private mutationQueue: Promise<void> = Promise.resolve();
 
   readonly entries = this.mutableEntries.asReadonly();
   readonly enabled = computed(() => this.vaultPresent());
@@ -134,38 +136,59 @@ export class SecretHistoryStore {
   }
 
   async add(entry: SecretHistoryEntry): Promise<boolean> {
-    if (!this.unlocked() || !this.key || !this.kdf) return false;
-    const updated = [entry, ...this.activeEntries()];
-    if (!await this.persist(updated, this.key, this.kdf)) return false;
-    this.mutableEntries.set(updated);
-    this.scheduleExpiryCleanup();
-    return true;
+    const generation = this.vaultGeneration;
+    return this.serializeMutation(async () => {
+      if (!this.isCurrentUnlockedVault(generation)) return false;
+      const key = this.key!;
+      const kdf = this.kdf!;
+      const updated = [entry, ...this.activeEntries()];
+      if (!await this.persist(updated, key, kdf, generation) || !this.isCurrentUnlockedVault(generation)) return false;
+      this.mutableEntries.set(updated);
+      this.scheduleExpiryCleanup();
+      return true;
+    });
   }
 
   async remove(id: string): Promise<boolean> {
-    if (!this.unlocked() || !this.key || !this.kdf) return false;
-    const updated = this.activeEntries().filter(entry => entry.id !== id);
-    if (!await this.persist(updated, this.key, this.kdf)) return false;
-    this.mutableEntries.set(updated);
-    this.scheduleExpiryCleanup();
-    return true;
+    const generation = this.vaultGeneration;
+    return this.serializeMutation(async () => {
+      if (!this.isCurrentUnlockedVault(generation)) return false;
+      const key = this.key!;
+      const kdf = this.kdf!;
+      const updated = this.activeEntries().filter(entry => entry.id !== id);
+      if (!await this.persist(updated, key, kdf, generation) || !this.isCurrentUnlockedVault(generation)) return false;
+      this.mutableEntries.set(updated);
+      this.scheduleExpiryCleanup();
+      return true;
+    });
   }
 
   async clear(): Promise<boolean> {
-    if (!this.unlocked() || !this.key || !this.kdf) return false;
-    if (!await this.persist([], this.key, this.kdf)) return false;
-    this.mutableEntries.set([]);
-    if (this.expiryCleanupTimeout) clearTimeout(this.expiryCleanupTimeout);
-    this.expiryCleanupTimeout = undefined;
-    return true;
+    const generation = this.vaultGeneration;
+    return this.serializeMutation(async () => {
+      if (!this.isCurrentUnlockedVault(generation)) return false;
+      const key = this.key!;
+      const kdf = this.kdf!;
+      if (!await this.persist([], key, kdf, generation) || !this.isCurrentUnlockedVault(generation)) return false;
+      this.mutableEntries.set([]);
+      if (this.expiryCleanupTimeout) clearTimeout(this.expiryCleanupTimeout);
+      this.expiryCleanupTimeout = undefined;
+      return true;
+    });
   }
 
   async pruneExpired(): Promise<boolean> {
-    const active = this.activeEntries();
-    if (active.length === this.mutableEntries().length) return false;
-    if (!this.key || !this.kdf || !await this.persist(active, this.key, this.kdf)) return false;
-    this.mutableEntries.set(active);
-    return true;
+    const generation = this.vaultGeneration;
+    return this.serializeMutation(async () => {
+      if (!this.isCurrentUnlockedVault(generation)) return false;
+      const active = this.activeEntries();
+      if (active.length === this.mutableEntries().length) return false;
+      const key = this.key!;
+      const kdf = this.kdf!;
+      if (!await this.persist(active, key, kdf, generation) || !this.isCurrentUnlockedVault(generation)) return false;
+      this.mutableEntries.set(active);
+      return true;
+    });
   }
 
   retryLegacyCleanup(): boolean {
@@ -188,10 +211,14 @@ export class SecretHistoryStore {
       this.error.set('tooShort');
       return false;
     }
+    const generation = ++this.vaultGeneration;
     try {
       const kdf = createKdfParameters();
       const key = await deriveVaultKey(passphrase, kdf);
       const envelope = await encryptEntries([], key, kdf);
+      if (generation !== this.vaultGeneration) return false;
+      // Invalidate mutations that began while the replacement vault was being prepared.
+      this.vaultGeneration++;
       this.storage.setItem(CIPHERTEXT_KEY, JSON.stringify(envelope));
       this.vaultPresent.set(true);
       this.kdf = kdf;
@@ -209,6 +236,7 @@ export class SecretHistoryStore {
   }
 
   async disable(): Promise<boolean> {
+    this.vaultGeneration++;
     try {
       this.storage.removeItem(CIPHERTEXT_KEY);
       for (const key of LEGACY_KEYS) this.storage.removeItem(key);
@@ -284,9 +312,21 @@ export class SecretHistoryStore {
     }
   }
 
-  private async persist(entries: SecretHistoryEntry[], key: CryptoKey, kdf: KdfParameters): Promise<boolean> {
+  private serializeMutation<T>(mutation: () => Promise<T>): Promise<T> {
+    const result = this.mutationQueue.then(mutation, mutation);
+    this.mutationQueue = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  private isCurrentUnlockedVault(generation: number): boolean {
+    return generation === this.vaultGeneration && this.unlocked() && !!this.key && !!this.kdf;
+  }
+
+  private async persist(entries: SecretHistoryEntry[], key: CryptoKey, kdf: KdfParameters, generation?: number): Promise<boolean> {
     try {
-      this.storage.setItem(CIPHERTEXT_KEY, JSON.stringify(await encryptEntries(entries, key, kdf)));
+      const envelope = await encryptEntries(entries, key, kdf);
+      if (generation !== undefined && generation !== this.vaultGeneration) return false;
+      this.storage.setItem(CIPHERTEXT_KEY, JSON.stringify(envelope));
       this.saveFailed.set(this.legacyCleanupFailed());
       return true;
     } catch {
