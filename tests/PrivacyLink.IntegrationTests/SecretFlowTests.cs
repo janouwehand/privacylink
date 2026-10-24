@@ -2,7 +2,10 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
 {
@@ -105,6 +108,71 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         var unknown = await _client.GetAsync("/api/v1/secrets/AAAAAAAAAAAAAAAAAAAAAA");
         Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
         Assert.Contains("not_found", await unknown.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task UnknownExpiredAndRevokedSecretsHaveIdenticalMetadataAndOpenResponses()
+    {
+        var clock = new MutableTimeProvider(DateTimeOffset.UtcNow);
+        using var factory = new TestApiFactory().WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+        {
+            services.RemoveAll<TimeProvider>();
+            services.AddSingleton<TimeProvider>(clock);
+        }));
+        using var client = factory.CreateClient();
+        var payload = new { protocolVersion = 1, expiry = "1d", message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" }, files = Array.Empty<object>() };
+
+        async Task<(string Id, string RevokeToken)> CreateSecretAsync()
+        {
+            using var created = await CreateProofTestHelper.CreateAsync(client, payload);
+            Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+            using var body = await created.Content.ReadFromJsonAsync<JsonDocument>();
+            return (body!.RootElement.GetProperty("id").GetString()!, body.RootElement.GetProperty("revokeToken").GetString()!);
+        }
+
+        var expired = await CreateSecretAsync();
+        var revoked = await CreateSecretAsync();
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync($"/api/v1/secrets/{expired.Id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync($"/api/v1/secrets/{revoked.Id}")).StatusCode);
+
+        using (var revoke = await client.PostAsJsonAsync($"/api/v1/secrets/{revoked.Id}/revoke", new { revokeToken = revoked.RevokeToken }))
+            Assert.Equal(HttpStatusCode.NoContent, revoke.StatusCode);
+        clock.Advance(TimeSpan.FromDays(2));
+
+        const string unknownId = "AAAAAAAAAAAAAAAAAAAAAA";
+        using var unknownMetadata = await client.GetAsync($"/api/v1/secrets/{unknownId}");
+        using var expiredMetadata = await client.GetAsync($"/api/v1/secrets/{expired.Id}");
+        using var revokedMetadata = await client.GetAsync($"/api/v1/secrets/{revoked.Id}");
+        var metadataResults = new[]
+        {
+            (unknownMetadata.StatusCode, await unknownMetadata.Content.ReadAsStringAsync()),
+            (expiredMetadata.StatusCode, await expiredMetadata.Content.ReadAsStringAsync()),
+            (revokedMetadata.StatusCode, await revokedMetadata.Content.ReadAsStringAsync())
+        };
+        Assert.All(metadataResults, result =>
+        {
+            Assert.Equal(HttpStatusCode.NotFound, result.Item1);
+            Assert.Equal("{\"code\":\"not_found\"}", result.Item2);
+        });
+        Assert.Equal(metadataResults[0], metadataResults[1]);
+        Assert.Equal(metadataResults[0], metadataResults[2]);
+
+        using var unknownOpen = await client.PostAsync($"/api/v1/secrets/{unknownId}/open", null);
+        using var expiredOpen = await client.PostAsync($"/api/v1/secrets/{expired.Id}/open", null);
+        using var revokedOpen = await client.PostAsync($"/api/v1/secrets/{revoked.Id}/open", null);
+        var openResults = new[]
+        {
+            (unknownOpen.StatusCode, await unknownOpen.Content.ReadAsStringAsync()),
+            (expiredOpen.StatusCode, await expiredOpen.Content.ReadAsStringAsync()),
+            (revokedOpen.StatusCode, await revokedOpen.Content.ReadAsStringAsync())
+        };
+        Assert.All(openResults, result =>
+        {
+            Assert.Equal(HttpStatusCode.NotFound, result.Item1);
+            Assert.Equal("{\"code\":\"not_found\"}", result.Item2);
+        });
+        Assert.Equal(openResults[0], openResults[1]);
+        Assert.Equal(openResults[0], openResults[2]);
     }
 
     [Fact]
@@ -340,5 +408,12 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         var limited = await client.PostAsJsonAsync($"/api/v1/secrets/{id}/unlock", new { password = "wrong horse" });
         Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
         Assert.Equal("{\"code\":\"rate_limited\"}", await limited.Content.ReadAsStringAsync());
+    }
+
+    private sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private DateTimeOffset _utcNow = utcNow;
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+        public void Advance(TimeSpan duration) => _utcNow += duration;
     }
 }

@@ -35,6 +35,7 @@ export class RecipientState {
   readonly emailVerified = signal(false);
   readonly emailCodeCooldownSeconds = signal(0);
   readonly error = signal<TranslatableError[]>([]);
+  readonly unavailable = computed(() => this.error().some(error => error.key === 'unavailable'));
   readonly lockoutSeconds = signal(0);
   readonly errorText = computed(() => this.error().map(error => this.language.translateError(error)).join(' '));
 
@@ -54,14 +55,14 @@ export class RecipientState {
     const requestId = ++this.metadataRequestId;
     this.clearRecipientData();
     this.clearError();
-    if (!id) { this.setError({ key: 'invalidLink' }); return; }
+    if (!id) { this.setUnavailable(); return; }
     try {
       decodeCanonical(id, 16);
       decodeCanonical(key, 32);
       this.recipientId = id;
       this.recipientKey = key;
     } catch {
-      this.setError({ key: 'invalidLink' });
+      this.setUnavailable();
       return;
     }
 
@@ -69,7 +70,8 @@ export class RecipientState {
     void this.api.getMetadata(id).then(async metadata => {
       if (requestId !== this.metadataRequestId) return;
       if (!metadata.exists || metadata.protocolVersion !== 1 || (!metadata.hasMessage && metadata.fileCount === 0)) {
-        throw new Error('unsupported protocol');
+        this.setUnavailable();
+        return;
       }
       let files: { id: string; name: string; extension: string; mimeType: string; size: number }[] = [];
       if (!metadata.passwordProtected && metadata.files.length) {
@@ -95,8 +97,10 @@ export class RecipientState {
       this.metadataFiles.set(files);
       this.metadataFileCount.set(metadata.fileCount);
       this.metadataReady.set(true);
-    }).catch(() => {
-      if (requestId === this.metadataRequestId) this.setError({ key: 'unavailable' });
+    }).catch(error => {
+      if (requestId !== this.metadataRequestId) return;
+      if (this.isRetryableRequestFailure(error)) this.setError({ key: 'temporarilyUnavailable' });
+      else this.setUnavailable();
     }).finally(() => {
       if (requestId === this.metadataRequestId) {
         this.loadingMetadata.set(false);
@@ -188,7 +192,9 @@ export class RecipientState {
         } else if (error instanceof SecretApiError && error.status === 403 && error.code === 'email_verification_required') {
           this.resetEmailVerificationSession();
           this.setError({ key: 'emailVerificationRequired' });
-        } else if (error instanceof SecretApiError && error.status === 503) {
+        } else if (error instanceof SecretApiError && error.status === 404) {
+          this.setUnavailable();
+        } else if (this.isRetryableRequestFailure(error)) {
           this.setError({ key: 'temporarilyUnavailable' });
         } else if (this.passwordProtected() && error instanceof SecretApiError && error.status === 403) {
           this.setError({ key: 'incorrectPassword' });
@@ -357,8 +363,12 @@ export class RecipientState {
       anchor.download = opened.filename.replace(/[\\/:\0]/g, '_');
       anchor.click();
       URL.revokeObjectURL(url);
-    } catch {
-      if (requestId === this.metadataRequestId) this.setError({ key: 'decryptFailure' });
+    } catch (error) {
+      if (requestId === this.metadataRequestId) {
+        if (error instanceof SecretApiError && error.status === 404) this.setUnavailable();
+        else if (this.isRetryableRequestFailure(error)) this.setError({ key: 'temporarilyUnavailable' });
+        else this.setError({ key: 'decryptFailure' });
+      }
     } finally {
       this.workProgress.finish();
     }
@@ -369,5 +379,21 @@ export class RecipientState {
     const token = this.cachedFilesToken;
     this.cachedFilesToken = undefined;
     void getSecretCryptoWorkerClient().clearCachedFiles(token).catch(() => undefined);
+  }
+
+  private setUnavailable(): void {
+    this.clearCachedFilePayload();
+    this.metadataFiles.set([]);
+    this.metadataFileCount.set(0);
+    this.metadataReady.set(false);
+    this.opened.set(false);
+    this.openedMessage.set('');
+    this.setError({ key: 'unavailable' });
+  }
+
+  private isRetryableRequestFailure(error: unknown): boolean {
+    if (error instanceof SecretApiError) return error.status === 408 || error.status >= 500;
+    return error instanceof TypeError ||
+      (error instanceof DOMException && (error.name === 'AbortError' || error.name === 'TimeoutError'));
   }
 }

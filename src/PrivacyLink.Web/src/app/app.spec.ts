@@ -10,7 +10,7 @@ import { HistoryState } from './history/history-state';
 import { LanguageState } from './language-state';
 import { RecipientState } from './recipient/recipient-state';
 import { RecipientPage } from './recipient/recipient-page';
-import { SecretApi } from './secret-api';
+import { SecretApi, SecretApiError } from './secret-api';
 import { SecretHistoryStore } from './secret-history-store';
 import { installTestWebLocks } from '../../test-utils/web-locks';
 import { decodeCanonical, decryptFile, decryptFileName, decryptMessage, encryptFile, encryptMessage } from './secret-crypto';
@@ -262,6 +262,146 @@ describe('App', () => {
     expect(api.open).not.toHaveBeenCalled();
     expect(recipient.openedMessage()).toBe('Worker opened this message');
     expect(recipient.opened()).toBe(true);
+  });
+
+  it('shows only the localized unavailable message for a malformed recipient link', async () => {
+    const fixture = await renderApp('/s/not-valid#broken');
+    const main = (fixture.nativeElement as HTMLElement).querySelector('main')!;
+
+    expect(main.textContent?.trim()).toBe('This link is unavailable.');
+    expect(main.querySelector('button, input, a')).toBeNull();
+    expect(api.getMetadata).not.toHaveBeenCalled();
+
+    TestBed.inject(LanguageState).setLanguage('nl');
+    fixture.detectChanges();
+    expect(main.textContent?.trim()).toBe('Deze link is niet beschikbaar.');
+  });
+
+  it('shows only the same unavailable message when metadata returns not found', async () => {
+    const id = 'AAAAAAAAAAAAAAAAAAAAAA';
+    api.getMetadata.mockRejectedValueOnce(new SecretApiError(404, null, 'not_found'));
+    const fixture = await renderApp(`/s/${id}#${'A'.repeat(43)}`);
+    await vi.waitFor(() => expect(fixture.nativeElement.querySelector('main')?.textContent?.trim()).toBe('This link is unavailable.'));
+
+    const main = (fixture.nativeElement as HTMLElement).querySelector('main')!;
+    expect(main.textContent?.trim()).toBe('This link is unavailable.');
+    expect(main.querySelector('button, input, a')).toBeNull();
+    expect(main.textContent).not.toContain('Someone shared something');
+    expect(main.textContent).not.toContain('does not exist');
+  });
+
+  it('switches to the unavailable state when opening returns not found after metadata loaded', async () => {
+    const id = 'AAAAAAAAAAAAAAAAAAAAAA';
+    api.openRaw.mockRejectedValueOnce(new SecretApiError(404, null, 'not_found'));
+    const fixture = await renderApp(`/s/${id}#${'A'.repeat(43)}`);
+    const recipient = fixture.debugElement.query(By.directive(RecipientPage)).injector.get(RecipientState);
+    await vi.waitFor(() => expect(recipient.metadataReady()).toBe(true));
+    expect((fixture.nativeElement as HTMLElement).querySelector('.card .primary')).not.toBeNull();
+
+    await recipient.open();
+    fixture.detectChanges();
+
+    const main = (fixture.nativeElement as HTMLElement).querySelector('main')!;
+    expect(main.textContent?.trim()).toBe('This link is unavailable.');
+    expect(main.querySelector('button, input, a')).toBeNull();
+    expect(main.textContent).not.toContain('Someone shared something');
+  });
+
+  it.each([
+    ['network failure', new TypeError('Failed to fetch')],
+    ['HTTP 408 timeout', new SecretApiError(408, null, 'request_timeout')],
+    ['HTTP 503', new SecretApiError(503, null, 'temporarily_unavailable')]
+  ])('shows the retry-later message for metadata %s', async (_label, failure) => {
+    api.getMetadata.mockRejectedValueOnce(failure);
+    const fixture = await renderApp(`/s/AAAAAAAAAAAAAAAAAAAAAA#${'A'.repeat(43)}`);
+    await vi.waitFor(() => expect(fixture.nativeElement.querySelector('.recipient-card .error')?.textContent).toContain('Please try again in a few moments.'));
+
+    const main = (fixture.nativeElement as HTMLElement).querySelector('main')!;
+    expect(main.textContent).toContain('The service is busy. Please try again in a few moments.');
+    expect(main.textContent).not.toContain('This link is unavailable.');
+    expect(main.textContent).toContain('Someone shared something with you through PrivacyLink.');
+  });
+
+  it.each([
+    ['network failure', new TypeError('Failed to fetch')],
+    ['HTTP 408 timeout', new SecretApiError(408, null, 'request_timeout')],
+    ['HTTP 500', new SecretApiError(500, null, 'server_error')]
+  ])('keeps retryable content-opening failure separate from unavailable links (%s)', async (_label, failure) => {
+    api.openRaw.mockRejectedValueOnce(failure);
+    const fixture = await renderApp(`/s/AAAAAAAAAAAAAAAAAAAAAA#${'A'.repeat(43)}`);
+    const recipient = fixture.debugElement.query(By.directive(RecipientPage)).injector.get(RecipientState);
+    await vi.waitFor(() => expect(recipient.metadataReady()).toBe(true));
+
+    await recipient.open();
+    fixture.detectChanges();
+
+    const main = (fixture.nativeElement as HTMLElement).querySelector('main')!;
+    expect(main.textContent).toContain('The service is busy. Please try again in a few moments.');
+    expect(main.textContent).not.toContain('This link is unavailable.');
+  });
+
+  it('keeps incorrect-password, email-verification, and rate-limit responses distinct', async () => {
+    const id = 'AAAAAAAAAAAAAAAAAAAAAA';
+    const key = 'A'.repeat(43);
+    api.getMetadata.mockResolvedValue({
+      exists: true,
+      protocolVersion: 1,
+      expiresAt: '2030-01-01T00:00:00.000Z',
+      passwordProtected: true,
+      hasMessage: true,
+      fileCount: 0,
+      files: []
+    });
+    api.unlockRaw.mockRejectedValueOnce(new SecretApiError(403, null, 'forbidden'));
+    const passwordFixture = await renderApp(`/s/${id}#${key}`);
+    const passwordRecipient = passwordFixture.debugElement.query(By.directive(RecipientPage)).injector.get(RecipientState);
+    await vi.waitFor(() => expect(passwordRecipient.metadataReady()).toBe(true));
+    passwordRecipient.unlockPassword.set('wrong password');
+    await passwordRecipient.open();
+    passwordFixture.detectChanges();
+    expect((passwordFixture.nativeElement as HTMLElement).textContent).toContain('That did not work. Check the PIN or password');
+    expect((passwordFixture.nativeElement as HTMLElement).textContent).not.toContain('This link is unavailable.');
+
+    passwordFixture.destroy();
+    localStorage.setItem(`privacylink.email-verification.${id}`, String(Date.now() + 60_000));
+    api.getMetadata.mockResolvedValueOnce({
+      exists: true,
+      protocolVersion: 1,
+      expiresAt: '2030-01-01T00:00:00.000Z',
+      passwordProtected: false,
+      hasMessage: true,
+      fileCount: 0,
+      files: [],
+      emailVerificationRequired: true,
+      maskedEmailAddress: 'r***@example.com'
+    });
+    api.openRaw.mockRejectedValueOnce(new SecretApiError(403, null, 'email_verification_required'));
+    const emailFixture = await renderApp(`/s/${id}#${key}`);
+    const emailRecipient = emailFixture.debugElement.query(By.directive(RecipientPage)).injector.get(RecipientState);
+    await vi.waitFor(() => expect(emailRecipient.metadataReady()).toBe(true));
+    await emailRecipient.open();
+    emailFixture.detectChanges();
+    expect((emailFixture.nativeElement as HTMLElement).textContent).toContain('Verify the email address before opening this link.');
+    expect((emailFixture.nativeElement as HTMLElement).textContent).not.toContain('This link is unavailable.');
+
+    emailFixture.destroy();
+    api.getMetadata.mockResolvedValueOnce({
+      exists: true,
+      protocolVersion: 1,
+      expiresAt: '2030-01-01T00:00:00.000Z',
+      passwordProtected: false,
+      hasMessage: true,
+      fileCount: 0,
+      files: []
+    });
+    api.openRaw.mockRejectedValueOnce(new SecretApiError(429, 60, 'rate_limited'));
+    const rateLimitFixture = await renderApp(`/s/${id}#${key}`);
+    const rateLimitRecipient = rateLimitFixture.debugElement.query(By.directive(RecipientPage)).injector.get(RecipientState);
+    await vi.waitFor(() => expect(rateLimitRecipient.metadataReady()).toBe(true));
+    await rateLimitRecipient.open();
+    rateLimitFixture.detectChanges();
+    expect((rateLimitFixture.nativeElement as HTMLElement).textContent).toContain('too many failed attempts');
+    expect((rateLimitFixture.nativeElement as HTMLElement).textContent).not.toContain('This link is unavailable.');
   });
 
   it('sends a code only after the recipient requests it and then verifies the code before opening', async () => {
