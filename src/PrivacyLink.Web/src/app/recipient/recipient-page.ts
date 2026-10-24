@@ -38,6 +38,11 @@ export class RecipientPage implements OnInit, AfterViewInit, OnDestroy {
     title?.nativeElement.focus();
   }
 
+  @ViewChild('unavailablePageTitle')
+  set unavailablePageTitle(title: ElementRef<HTMLHeadingElement> | undefined) {
+    title?.nativeElement.focus();
+  }
+
   ngOnInit(): void {
     combineLatest([this.route.paramMap, this.route.fragment])
       .pipe(takeUntilDestroyed(this.destroyRef))
