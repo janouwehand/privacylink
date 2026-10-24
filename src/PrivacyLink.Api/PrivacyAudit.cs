@@ -21,6 +21,8 @@ internal static class PrivacyAudit
     {
         if (HttpMethods.IsGet(request.Method)) return "metadata";
         var path = request.Path.Value ?? string.Empty;
+        if (path.EndsWith("/email-verification/request", StringComparison.Ordinal)) return "email_request";
+        if (path.EndsWith("/email-verification/verify", StringComparison.Ordinal)) return "email_verify";
         if (path.EndsWith("/revoke", StringComparison.Ordinal)) return "revoke";
         if (path.EndsWith("/unlock", StringComparison.Ordinal)) return "unlock";
         if (path.EndsWith("/open", StringComparison.Ordinal)) return "open";

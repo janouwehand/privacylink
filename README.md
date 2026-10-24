@@ -41,12 +41,12 @@ Use independent random values for the password pepper and audit hash key. The au
 
 ## Docker Compose
 
-The image contains both the Angular build and the .NET API. PostgreSQL runs as a separate Compose service, so its hostname in the connection string is `postgres`. Compose mounts three secret values as files: the database password, password pepper, and audit hash key. By default, the API binds to a host port on loopback only. The database and encrypted blobs are stored in separate volumes named per Compose project.
+The image contains both the Angular build and the .NET API. PostgreSQL runs as a separate Compose service, so its hostname in the connection string is `postgres`. Compose mounts the database password, password pepper, audit hash key, create-proof key, admin password, email-verification key, and Resend API key as secret files. The verified Resend sender address is supplied as configuration. By default, the API binds to a host port on loopback only. The database and encrypted blobs are stored in separate volumes named per Compose project.
 
 ```powershell
 Copy-Item .env.example .env
-# Set the database password and password pepper to long, independent values.
-# Generate a unique 32-byte Base64 value for the audit hash key.
+# Replace every placeholder with values for this installation. Use independent
+# random values for the secret keys and a sender address verified in Resend.
 docker compose up --build -d
 ```
 
@@ -67,7 +67,7 @@ dotnet user-secrets set "Security:CreateProofDifficultyBits" "17" --project src/
 dotnet run --project src/PrivacyLink.Api --urls http://localhost:5080
 ```
 
-The Development environment uses in-memory secret and audit storage and the local development pepper; create proofs fail closed with HTTP 503 unless PostgreSQL is configured because replay protection needs durable shared storage. Use an independent random key for each environment and do not commit it. Difficulty 17 is a provisional baseline, not a phone-calibrated production setting. In production, the API requires a PostgreSQL connection string, an absolute blob root, `Security:PasswordPepper` from Environment configuration, `Security:AuditHashKey`, `Security:CreateProofHmacKey`, `Security:RequirePasswordPepper=true`, an explicit `Security:RequireHttps` value, and explicit `AllowedHosts`. Configure `Security:TrustedProxies` with the proxy's exact IP address when TLS terminates at a proxy. Do not trust `X-Forwarded-*` headers without an explicit proxy IP.
+The Development environment uses in-memory secret and audit storage and the local development pepper. Create proofs use a bounded, process-local replay store in this mode; use PostgreSQL for durable, shared replay protection. E-mail-protected secrets require PostgreSQL plus `Security:EmailVerificationHmacKey`, `Resend:ApiKey`, and a verified `Resend:FromAddress`; the server stores and returns only a masked address in metadata. OTP requests and encrypted mail jobs are committed together to a PostgreSQL outbox, and a leased worker can recover jobs after restarts. Configure these settings through User Secrets for local development. The base Compose file includes email verification and reads its key and Resend API key from the same `.env` file as the other deployment secrets; there is no optional overlay. Use an independent random key for each environment and do not commit secrets. Difficulty 17 is a provisional baseline, not a phone-calibrated production setting. In production, the API requires a PostgreSQL connection string, an absolute blob root, `Security:PasswordPepper` from Environment configuration, `Security:AuditHashKey`, `Security:CreateProofHmacKey`, `Security:RequirePasswordPepper=true`, an explicit `Security:RequireHttps` value, and explicit `AllowedHosts`. Configure `Security:TrustedProxies` with the proxy's exact IP address when TLS terminates at a proxy. Do not trust `X-Forwarded-*` headers without an explicit proxy IP.
 
 Application privacy audit records include the operation, status, trace ID, and duration. When a valid `Security:AuditHashKey` is configured (required in production), the record also includes a truncated HMAC-SHA-256 of the client IP; without a valid key, the client field is `unavailable`. The application does not log request bodies, passwords, keys, or secret IDs. Product statistics collection has been retired; `/stats` reports that statistics are temporarily unavailable and `/api/v1/stats` returns HTTP 410. The application uses client IPs for in-memory rate limiting as well. This does not describe logs produced by the hosting platform, proxy, or infrastructure. Default limits for request body size, files, Argon2, and rate limiting are security limits and should only be changed deliberately.
 

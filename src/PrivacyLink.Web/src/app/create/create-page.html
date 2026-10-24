@@ -33,11 +33,29 @@
             </div>
           </div>
           <div class="field-note">{{ language.t('passwordHint') }}</div>
+          <div class="email-verification-control">
+            @if (create.emailVerificationEnabled()) {
+              <span class="email-verification-summary"><span aria-hidden="true">✓</span>{{ language.t('emailVerificationEnabledFor', { email: create.recipientEmail() }) }}</span>
+            }
+            <button class="subtle-link" type="button" (click)="openEmailVerificationDialog()" [disabled]="create.busy()" aria-haspopup="dialog">{{ create.emailVerificationEnabled() ? language.t('emailVerificationChange') : language.t('emailVerificationAdd') }}</button>
+            @if (create.emailVerificationEnabled()) { <button class="subtle-link email-verification-remove" type="button" (click)="removeEmailVerification()" [disabled]="create.busy()">{{ language.t('emailVerificationRemove') }}</button> }
+          </div>
         </div>
         <div class="form-field expiry-setting"><label for="expiry">{{ language.t('expiry') }}</label><select id="expiry" [value]="create.expiry()" (change)="create.updateExpiry($event)" [disabled]="create.busy()"><option value="1d">{{ language.t('day') }}</option><option value="7d">{{ language.t('week') }}</option><option value="14d">{{ language.t('twoWeeks') }}</option></select></div>
       </div>
     </div>
     @if (create.error().length) { <p class="error" role="alert">{{ create.errorText() }}</p> }
-    <div class="compose-actions"><button class="primary" type="button" (click)="create.create()" [disabled]="create.busy()">{{ create.busy() ? language.t('creating') : language.t('create') }}</button>@if (create.proofCalculating() && !create.busy()) { <span class="field-note" role="status" aria-live="polite">{{ language.t('workPreparing') }}</span> }</div>
+    <div class="compose-actions"><div class="compose-action-stack"><button class="primary" type="button" (click)="create.create()" [disabled]="create.busy()">{{ create.busy() ? language.t('creating') : language.t('create') }}</button><div class="compose-status-slot" role="status" aria-live="polite" aria-atomic="true">@if (create.proofCalculating() && !create.busy()) { <span class="compose-status">{{ language.t('proofPreparing') }}</span> }</div></div></div>
   </section>
+  <dialog #emailVerificationDialog class="email-verification-dialog" aria-labelledby="email-verification-title" aria-describedby="email-verification-description">
+    <div class="email-verification-dialog-header"><div><div class="eyebrow">{{ language.t('emailVerificationEyebrow') }}</div><h2 id="email-verification-title">{{ language.t('emailVerificationTitle') }}</h2></div><button class="generator-close" type="button" (click)="closeEmailVerificationDialog()" [attr.aria-label]="language.t('close')">×</button></div>
+    <p id="email-verification-description">{{ language.t('emailVerificationIntro') }}</p>
+    <ol class="email-verification-steps"><li>{{ language.t('emailVerificationStep1') }}</li><li>{{ language.t('emailVerificationStep2') }}</li><li>{{ language.t('emailVerificationStep3') }}</li></ol>
+    <form class="email-verification-form" (submit)="saveEmailVerification($event)">
+      <label for="recipient-email">{{ language.t('recipientEmail') }}</label>
+      <input id="recipient-email" type="email" autocomplete="email" [placeholder]="language.t('emailPlaceholder')" [value]="emailDraft()" (input)="updateEmailDraft($event)" required autofocus>
+      <p class="field-note">{{ language.t('emailVerificationPrivacyHint') }}</p>
+      <div class="dialog-actions"><button class="secondary" type="button" (click)="closeEmailVerificationDialog()">{{ language.t('cancel') }}</button><button class="primary" type="submit">{{ create.emailVerificationEnabled() ? language.t('emailVerificationSave') : language.t('emailVerificationConfirm') }}</button></div>
+    </form>
+  </dialog>
 }

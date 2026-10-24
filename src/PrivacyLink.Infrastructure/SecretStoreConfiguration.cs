@@ -26,6 +26,14 @@ public static class SecretStoreConfiguration
         if (!string.IsNullOrWhiteSpace(createProofKeyPath))
             settings["Security:CreateProofHmacKey"] = ReadSecretFile(createProofKeyPath);
 
+        var emailVerificationKeyPath = configuration["Security:EmailVerificationHmacKey_FILE"];
+        if (!string.IsNullOrWhiteSpace(emailVerificationKeyPath))
+            settings["Security:EmailVerificationHmacKey"] = ReadSecretFile(emailVerificationKeyPath);
+
+        var resendApiKeyPath = configuration["Resend:ApiKey_FILE"];
+        if (!string.IsNullOrWhiteSpace(resendApiKeyPath))
+            settings["Resend:ApiKey"] = ReadSecretFile(resendApiKeyPath);
+
         var databasePasswordPath = configuration["ConnectionStrings:PrivacyLinkPassword_FILE"];
         if (!string.IsNullOrWhiteSpace(databasePasswordPath))
         {

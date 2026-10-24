@@ -124,6 +124,11 @@ internal sealed class SecretRequestAuditMiddleware(IConfiguration configuration,
             }
             return ("secret_request", "/api/v1/secrets/{id}/*");
         }
+        if (segments.Length == 6 && IsSegment(segments[2], "secrets") && IsSegment(segments[4], "email-verification") && HttpMethods.IsPost(method))
+        {
+            if (IsSegment(segments[5], "request")) return ("email_request", "/api/v1/secrets/{id}/email-verification/request");
+            if (IsSegment(segments[5], "verify")) return ("email_verify", "/api/v1/secrets/{id}/email-verification/verify");
+        }
         if (segments.Length == 7 && IsSegment(segments[2], "secrets") && IsSegment(segments[4], "files") && IsSegment(segments[6], "open") && HttpMethods.IsPost(method))
             return ("file_open", "/api/v1/secrets/{id}/files/{fileId}/open");
         return ("secret_request", secretApi ? "/api/v1/secrets/*" : "/s/*");

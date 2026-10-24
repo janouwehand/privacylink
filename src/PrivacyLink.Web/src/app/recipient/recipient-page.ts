@@ -28,6 +28,11 @@ export class RecipientPage implements OnInit, AfterViewInit, OnDestroy {
     input?.nativeElement.focus();
   }
 
+  @ViewChild('emailCodeInput')
+  set emailCodeInputElement(input: ElementRef<HTMLInputElement> | undefined) {
+    if (input) queueMicrotask(() => input.nativeElement.focus());
+  }
+
   @ViewChild('openedPageTitle')
   set openedPageTitle(title: ElementRef<HTMLHeadingElement> | undefined) {
     title?.nativeElement.focus();
@@ -49,6 +54,11 @@ export class RecipientPage implements OnInit, AfterViewInit, OnDestroy {
     if (this.recipient.error().some(error => error.key === 'incorrectPassword')) {
       this.unlockPasswordInput?.nativeElement.focus();
     }
+  }
+
+  async verifyEmailCode(event: SubmitEvent): Promise<void> {
+    event.preventDefault();
+    await this.recipient.verifyEmailCode();
   }
 
   ngOnDestroy(): void { this.recipient.leave(); }

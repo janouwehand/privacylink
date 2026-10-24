@@ -8,6 +8,9 @@ public static class InfrastructureRegistration
 {
     public static IServiceCollection AddPrivacyLinkInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
+        services.AddSingleton(EmailVerificationOptions.FromConfiguration(configuration));
+        services.AddHttpClient();
+        services.AddSingleton<IEmailSender, ResendEmailSender>();
         services.AddSingleton<StorageHealth>();
         services.AddSingleton<IStorageReadiness>(sp => sp.GetRequiredService<StorageHealth>());
         if (!string.IsNullOrWhiteSpace(configuration.GetConnectionString("PrivacyLink")))
@@ -19,6 +22,7 @@ public static class InfrastructureRegistration
             services.AddSingleton<ISecretRequestAuditReader>(sp => sp.GetRequiredService<PostgresSecretRequestAuditWriter>());
             services.AddSingleton<PostgresSecretRepository>();
             services.AddSingleton<ISecretRepository>(sp => sp.GetRequiredService<PostgresSecretRepository>());
+            services.AddSingleton<IEmailVerificationStore, PostgresEmailVerificationStore>();
             services.AddSingleton<IInfrastructureHealthCheck>(sp => sp.GetRequiredService<PostgresSecretRepository>());
             services.AddSingleton<IInfrastructureInitializer>(sp => sp.GetRequiredService<PostgresSecretRepository>());
             services.AddSingleton<FileBlobStorage>();
@@ -28,12 +32,13 @@ public static class InfrastructureRegistration
         }
         else
         {
-            services.AddSingleton<ICreateProofReplayStore, UnavailableCreateProofReplayStore>();
+            services.AddSingleton<ICreateProofReplayStore, InMemoryCreateProofReplayStore>();
             services.AddSingleton<InMemorySecretRequestAuditWriter>();
             services.AddSingleton<ISecretRequestAuditWriter>(sp => sp.GetRequiredService<InMemorySecretRequestAuditWriter>());
             services.AddSingleton<ISecretRequestAuditReader>(sp => sp.GetRequiredService<InMemorySecretRequestAuditWriter>());
             services.AddSingleton<InMemorySecretRepository>();
             services.AddSingleton<ISecretRepository>(sp => sp.GetRequiredService<InMemorySecretRepository>());
+            services.AddSingleton<IEmailVerificationStore, UnavailableEmailVerificationStore>();
             services.AddSingleton<IInfrastructureHealthCheck>(sp => sp.GetRequiredService<InMemorySecretRepository>());
             services.AddSingleton<IInfrastructureInitializer>(sp => sp.GetRequiredService<InMemorySecretRepository>());
             services.AddSingleton<InMemoryBlobStorage>();
@@ -42,7 +47,9 @@ public static class InfrastructureRegistration
         }
 
         services.AddHostedService<StorageInitializer>();
+        services.AddHostedService<EmailVerificationDeliveryWorker>();
         services.AddHostedService<ExpiredSecretCleanup>();
+        services.AddHostedService<EmailVerificationCleanupService>();
         return services;
     }
 }

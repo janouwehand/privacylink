@@ -58,6 +58,7 @@ builder.Services.AddSingleton(sp => new PasswordEnvelopeService(new PasswordEnve
     BoundedLimit(builder.Configuration, "Security:Argon2:MaxQueuedUnlocks", 8, 0, 64),
     BoundedLimit(builder.Configuration, "Security:Argon2:UnlockQueueTimeoutSeconds", 30, 1, 120))));
 builder.Services.AddSingleton<SecretApplicationService>();
+builder.Services.AddSingleton<EmailVerificationService>();
 builder.Services.AddSingleton<CreateProofOfWork>();
 builder.Services.AddTransient<SecretRequestAuditMiddleware>();
 builder.Services.AddPrivacyLinkInfrastructure(builder.Configuration);
@@ -204,10 +205,12 @@ adminApi.MapPost("/logout", (Delegate)AdminEndpoints.Logout).RequireAuthorizatio
 adminApi.MapGet("/audit", (Delegate)AdminEndpoints.Audit).RequireAuthorization();
 app.MapPost("/api/v1/secrets", (HttpRequest request, HttpContext context, SecretApplicationService service, IConfiguration configuration, CreateProofOfWork proof) => SecretEndpoints.Create(request, context, service, configuration, proof)).RequireRateLimiting("create");
 app.MapGet("/api/v1/secrets/{id}", (string id, SecretApplicationService service, TimeProvider clock) => SecretEndpoints.Metadata(id, service, clock));
+app.MapPost("/api/v1/secrets/{id}/email-verification/request", (string id, HttpRequest request, EmailVerificationService verification) => SecretEndpoints.RequestEmailCode(id, request, verification)).WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(1024));
+app.MapPost("/api/v1/secrets/{id}/email-verification/verify", (string id, HttpRequest request, EmailVerificationService verification, TimeProvider clock, IWebHostEnvironment environment) => SecretEndpoints.VerifyEmailCode(id, request, verification, clock, environment)).WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(2048));
 app.MapPost("/api/v1/secrets/{id}/revoke", (string id, HttpRequest request, SecretApplicationService service, ILoggerFactory loggerFactory) => SecretEndpoints.Revoke(id, request, service, loggerFactory)).RequireRateLimiting("revoke");
-app.MapPost("/api/v1/secrets/{id}/open", (string id, HttpRequest request, SecretApplicationService service, TimeProvider clock) => SecretEndpoints.Open(id, request, service, clock)).RequireRateLimiting("open");
-app.MapPost("/api/v1/secrets/{id}/unlock", (string id, HttpRequest request, SecretApplicationService service, TimeProvider clock, IConfiguration configuration) => SecretEndpoints.Unlock(id, request, service, clock, configuration)).RequireRateLimiting("unlock");
-app.MapPost("/api/v1/secrets/{id}/files/{fileId}/open", (string id, string fileId, HttpRequest request, SecretApplicationService service, TimeProvider clock) => SecretEndpoints.OpenFile(id, fileId, request, service, clock)).RequireRateLimiting("open");
+app.MapPost("/api/v1/secrets/{id}/open", (string id, HttpRequest request, SecretApplicationService service, TimeProvider clock, EmailVerificationService verification, IWebHostEnvironment environment) => SecretEndpoints.Open(id, request, service, clock, verification, environment)).RequireRateLimiting("open");
+app.MapPost("/api/v1/secrets/{id}/unlock", (string id, HttpRequest request, SecretApplicationService service, TimeProvider clock, IConfiguration configuration, EmailVerificationService verification, IWebHostEnvironment environment) => SecretEndpoints.Unlock(id, request, service, clock, configuration, verification, environment)).RequireRateLimiting("unlock");
+app.MapPost("/api/v1/secrets/{id}/files/{fileId}/open", (string id, string fileId, HttpRequest request, SecretApplicationService service, TimeProvider clock, EmailVerificationService verification, IWebHostEnvironment environment) => SecretEndpoints.OpenFile(id, fileId, request, service, clock, verification, environment)).RequireRateLimiting("open");
 app.MapFallbackToFile("index.html");
 
 app.Run();
@@ -235,6 +238,8 @@ static int BoundedLimit(IConfiguration configuration, string key, int fallback, 
 [JsonSerializable(typeof(OpenedFileResponse))]
 [JsonSerializable(typeof(ErrorResponse))]
 [JsonSerializable(typeof(UnlockSecretRequest))]
+[JsonSerializable(typeof(EmailCodeRequestResponse))]
+[JsonSerializable(typeof(VerifyEmailCodeRequest))]
 [JsonSerializable(typeof(CreateSecretRequest))]
 [JsonSerializable(typeof(AdminLoginRequest))]
 [JsonSerializable(typeof(AdminSessionResponse))]

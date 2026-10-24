@@ -15,6 +15,9 @@ services:
       Security__CreateProofHmacKey_FILE: /run/secrets/create_proof_hmac_key
       Security__CreateProofDifficultyBits: "${PRIVACYLINK_CREATE_PROOF_DIFFICULTY_BITS:-17}"
       Security__AdminPassword_FILE: /run/secrets/admin_password
+      Security__EmailVerificationHmacKey_FILE: /run/secrets/email_verification_hmac_key
+      Resend__ApiKey_FILE: /run/secrets/resend_api_key
+      Resend__FromAddress: "${PRIVACYLINK_RESEND_FROM_ADDRESS:?Set PRIVACYLINK_RESEND_FROM_ADDRESS to a verified sender address}"
       Security__SecretStore__Provider: Environment
       Security__RequireHttps: "${PRIVACYLINK_REQUIRE_HTTPS:-false}"
       Security__TrustedProxies__0: "${PRIVACYLINK_TRUSTED_PROXY_0:-}"
@@ -33,6 +36,8 @@ services:
       - audit_hash_key
       - create_proof_hmac_key
       - admin_password
+      - email_verification_hmac_key
+      - resend_api_key
     depends_on:
       postgres:
         condition: service_healthy
@@ -78,3 +83,7 @@ secrets:
     environment: PRIVACYLINK_CREATE_PROOF_HMAC_KEY
   admin_password:
     environment: PRIVACYLINK_ADMIN_PASSWORD
+  email_verification_hmac_key:
+    environment: PRIVACYLINK_EMAIL_VERIFICATION_HMAC_KEY
+  resend_api_key:
+    environment: PRIVACYLINK_RESEND_API_KEY

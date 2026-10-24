@@ -7,6 +7,9 @@ import type { TranslatableError } from '../translations';
 import { WorkProgressState } from '../work-progress-state';
 import { getSecretCryptoWorkerClient } from '../secret-crypto-worker-client';
 
+const EMAIL_VERIFICATION_SESSION_MS = 30 * 60 * 1000;
+const EMAIL_CODE_REQUEST_COOLDOWN_SECONDS = 60;
+
 @Injectable()
 export class RecipientState {
   private readonly api = inject(SecretApi);
@@ -24,6 +27,13 @@ export class RecipientState {
   readonly openedMessage = signal('');
   readonly expiresAt = signal('');
   readonly passwordProtected = signal(false);
+  readonly emailVerificationRequired = signal(false);
+  readonly maskedEmailAddress = signal('');
+  readonly emailCodeRequested = signal(false);
+  readonly emailCode = signal('');
+  readonly emailVerificationBusy = signal(false);
+  readonly emailVerified = signal(false);
+  readonly emailCodeCooldownSeconds = signal(0);
   readonly error = signal<TranslatableError[]>([]);
   readonly lockoutSeconds = signal(0);
   readonly errorText = computed(() => this.error().map(error => this.language.translateError(error)).join(' '));
@@ -33,6 +43,7 @@ export class RecipientState {
   private cachedFilesToken: string | undefined;
   private metadataRequestId = 0;
   private lockoutTimer: ReturnType<typeof setInterval> | undefined;
+  private emailCodeCooldownTimer: ReturnType<typeof setInterval> | undefined;
 
   setError(error: TranslatableError): void { this.error.set([error]); }
   clearError(): void { this.error.set([]); }
@@ -76,6 +87,10 @@ export class RecipientState {
       }
       if (requestId !== this.metadataRequestId) return;
       this.passwordProtected.set(metadata.passwordProtected);
+      const emailVerificationRequired = metadata.emailVerificationRequired === true;
+      this.emailVerificationRequired.set(emailVerificationRequired);
+      this.maskedEmailAddress.set(metadata.maskedEmailAddress ?? '');
+      this.emailVerified.set(emailVerificationRequired && this.hasEmailVerificationSession(id));
       this.expiresAt.set(metadata.expiresAt);
       this.metadataFiles.set(files);
       this.metadataFileCount.set(metadata.fileCount);
@@ -101,6 +116,7 @@ export class RecipientState {
   private clearRecipientData(): void {
     this.clearCachedFilePayload();
     this.clearLockout();
+    this.clearEmailCodeCooldown();
     this.recipientId = '';
     this.recipientKey = '';
     this.unlockPassword.set('');
@@ -111,12 +127,19 @@ export class RecipientState {
     this.opened.set(false);
     this.openedMessage.set('');
     this.passwordProtected.set(false);
+    this.emailVerificationRequired.set(false);
+    this.maskedEmailAddress.set('');
+    this.emailCodeRequested.set(false);
+    this.emailCode.set('');
+    this.emailVerificationBusy.set(false);
+    this.emailVerified.set(false);
     this.expiresAt.set('');
     this.busy.set(false);
   }
 
   async open(): Promise<void> {
     if (this.busy() || !this.metadataReady() || this.lockoutSeconds() > 0) return;
+    if (this.emailVerificationRequired() && !this.emailVerified()) return;
     const requestId = this.metadataRequestId;
     this.busy.set(true);
     this.workProgress.begin('open', this.passwordProtected() ? [] : this.metadataFiles().map(file => file.name));
@@ -162,6 +185,9 @@ export class RecipientState {
         if (error instanceof SecretApiError && error.status === 429) {
           this.setError({ key: 'rateLimited' });
           this.startLockout(error.retryAfterSeconds);
+        } else if (error instanceof SecretApiError && error.status === 403 && error.code === 'email_verification_required') {
+          this.resetEmailVerificationSession();
+          this.setError({ key: 'emailVerificationRequired' });
         } else if (error instanceof SecretApiError && error.status === 503) {
           this.setError({ key: 'temporarilyUnavailable' });
         } else if (this.passwordProtected() && error instanceof SecretApiError && error.status === 403) {
@@ -177,6 +203,108 @@ export class RecipientState {
       }
       this.workProgress.finish();
     }
+  }
+
+  async requestEmailCode(): Promise<void> {
+    if (this.emailVerificationBusy() || this.emailCodeCooldownSeconds() > 0 || !this.emailVerificationRequired() || !this.recipientId) return;
+    const requestId = this.metadataRequestId;
+    const recipientId = this.recipientId;
+    this.emailVerificationBusy.set(true);
+    this.clearError();
+    try {
+      await this.api.requestEmailCode(recipientId);
+      if (requestId !== this.metadataRequestId || recipientId !== this.recipientId) return;
+      this.emailCode.set('');
+      this.emailCodeRequested.set(true);
+      this.startEmailCodeCooldown();
+    } catch (error) {
+      if (requestId === this.metadataRequestId && recipientId === this.recipientId) {
+        this.setError({ key: error instanceof SecretApiError && error.status === 429 ? 'emailVerificationRateLimited' : 'temporarilyUnavailable' });
+      }
+    } finally {
+      if (requestId === this.metadataRequestId && recipientId === this.recipientId) this.emailVerificationBusy.set(false);
+    }
+  }
+
+  updateEmailCode(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const code = input.value.replace(/\D/g, '').slice(0, 6);
+    input.value = code;
+    this.emailCode.set(code);
+  }
+
+  canVerifyEmailCode(): boolean { return /^\d{6}$/.test(this.emailCode()); }
+
+  async verifyEmailCode(): Promise<void> {
+    if (this.emailVerificationBusy() || !this.emailCodeRequested() || !this.canVerifyEmailCode() || !this.recipientId) return;
+    const requestId = this.metadataRequestId;
+    const recipientId = this.recipientId;
+    const code = this.emailCode();
+    this.emailVerificationBusy.set(true);
+    this.clearError();
+    try {
+      await this.api.verifyEmailCode(recipientId, code);
+      if (requestId !== this.metadataRequestId || recipientId !== this.recipientId) return;
+      this.emailVerified.set(true);
+      this.emailCodeRequested.set(false);
+      this.emailCode.set('');
+      this.clearEmailCodeCooldown();
+      this.saveEmailVerificationSession(recipientId);
+    } catch (error) {
+      if (requestId === this.metadataRequestId && recipientId === this.recipientId) {
+        this.setError({ key: error instanceof SecretApiError && error.status === 429 ? 'emailVerificationRateLimited' : error instanceof SecretApiError && error.status === 400 ? 'invalidEmailCode' : 'temporarilyUnavailable' });
+      }
+    } finally {
+      if (requestId === this.metadataRequestId && recipientId === this.recipientId) this.emailVerificationBusy.set(false);
+    }
+  }
+
+  private emailVerificationSessionKey(id: string): string { return `privacylink.email-verification.${id}`; }
+
+  private hasEmailVerificationSession(id: string): boolean {
+    try {
+      const storage = this.document.defaultView?.localStorage;
+      const expiresAt = Number(storage?.getItem(this.emailVerificationSessionKey(id)));
+      if (Number.isFinite(expiresAt) && expiresAt > Date.now()) return true;
+      storage?.removeItem(this.emailVerificationSessionKey(id));
+    } catch { /* Browser storage is only a UI hint; the server cookie remains authoritative. */ }
+    return false;
+  }
+
+  private saveEmailVerificationSession(id: string): void {
+    try { this.document.defaultView?.localStorage.setItem(this.emailVerificationSessionKey(id), String(Date.now() + EMAIL_VERIFICATION_SESSION_MS)); }
+    catch { /* The HttpOnly server cookie remains authoritative when storage is unavailable. */ }
+  }
+
+  private resetEmailVerificationSession(): void {
+    this.emailVerified.set(false);
+    this.emailCodeRequested.set(false);
+    this.emailCode.set('');
+    try { this.document.defaultView?.localStorage.removeItem(this.emailVerificationSessionKey(this.recipientId)); }
+    catch { /* Ignore unavailable browser storage. */ }
+  }
+
+  private startEmailCodeCooldown(): void {
+    this.clearEmailCodeCooldown();
+    this.emailCodeCooldownSeconds.set(EMAIL_CODE_REQUEST_COOLDOWN_SECONDS);
+    this.emailCodeCooldownTimer = setInterval(() => {
+      const remaining = this.emailCodeCooldownSeconds() - 1;
+      this.emailCodeCooldownSeconds.set(Math.max(remaining, 0));
+      if (remaining <= 0) this.clearEmailCodeCooldown();
+    }, 1000);
+  }
+
+  private clearEmailCodeCooldown(): void {
+    if (this.emailCodeCooldownTimer !== undefined) clearInterval(this.emailCodeCooldownTimer);
+    this.emailCodeCooldownTimer = undefined;
+    this.emailCodeCooldownSeconds.set(0);
+  }
+
+  emailCodeCountdownText(): string {
+    const totalSeconds = this.emailCodeCooldownSeconds();
+    const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+    const seconds = (totalSeconds % 60).toString().padStart(2, '0');
+    return `${minutes}:${seconds}`;
   }
 
   private startLockout(seconds: number | null): void {

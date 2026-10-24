@@ -50,6 +50,8 @@ export class CreateState {
   readonly fileAccept = computed(() => this.filePolicy()?.allowedFileExtensions.join(',') ?? null);
   readonly isDragging = signal(false);
   readonly expiry = signal<Expiry>('7d');
+  readonly emailVerificationEnabled = signal(false);
+  readonly recipientEmail = signal('');
   readonly busy = signal(false);
   readonly proofCalculating = signal(false);
   readonly shareLink = signal('');
@@ -250,6 +252,13 @@ export class CreateState {
     this.passwordCopyAcknowledged.set(false);
   }
 
+  setRecipientEmail(email: string): void { this.recipientEmail.set(email); }
+  enableEmailVerification(): void { this.emailVerificationEnabled.set(true); }
+  removeEmailVerification(): void {
+    this.emailVerificationEnabled.set(false);
+    this.recipientEmail.set('');
+  }
+
   togglePasswordVisibility(): void { this.passwordVisible.update(visible => !visible); }
 
   openPasswordGenerator(): void { this.passwordGeneratorOpen.set(true); }
@@ -356,6 +365,7 @@ export class CreateState {
         protocolVersion: 1,
         expiry: this.expiry(),
         message: this.message().trim() ? encrypted.message : null,
+        ...(this.emailVerificationEnabled() ? { emailAddress: this.recipientEmail() } : {}),
         ...(this.password() ? { password: await derivePasswordToken(this.password(), encrypted.clientKey) } : {})
       } as const;
       const created = filesToEncrypt.length
@@ -376,12 +386,14 @@ export class CreateState {
       this.message.set('');
       this.selectedFiles.set([]);
       this.password.set('');
+      this.emailVerificationEnabled.set(false);
+      this.recipientEmail.set('');
       this.passwordVisible.set(false);
       this.passwordCopied.set(false);
       this.passwordCopyAcknowledged.set(false);
       this.stopProof();
-    } catch {
-      this.setError({ key: 'failure' });
+    } catch (error) {
+      this.setError({ key: error instanceof SecretApiError && error.status === 429 ? 'creationRateLimited' : 'failure' });
     } finally {
       this.busy.set(false);
       this.workProgress.finish();
@@ -390,7 +402,7 @@ export class CreateState {
   }
 
   private async createFilesWithWorker(
-    request: { protocolVersion: 1; expiry: Expiry; message: { nonce: string; ciphertext: string } | null; password?: string },
+    request: { protocolVersion: 1; expiry: Expiry; message: { nonce: string; ciphertext: string } | null; password?: string; emailAddress?: string },
     files: File[],
     clientKey: Uint8Array
   ): Promise<{ id: string; expiresAt: string; passwordProtected: boolean; revokeToken: string }> {
@@ -422,6 +434,8 @@ export class CreateState {
     this.clearError();
     this.copied.set(false);
     this.password.set('');
+    this.emailVerificationEnabled.set(false);
+    this.recipientEmail.set('');
     this.passwordVisible.set(false);
     this.passwordCopied.set(false);
     this.passwordCopyAcknowledged.set(false);

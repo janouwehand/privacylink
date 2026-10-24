@@ -5,25 +5,36 @@ namespace PrivacyLink.Services;
 
 public sealed record SecretCreateMessage(string Nonce, byte[] Ciphertext);
 public sealed record SecretCreateFile(string Id, string Extension, string NameNonce, string NameCiphertext, string MimeType, long Size, string Nonce, byte[] Ciphertext);
-public sealed record CreateSecretCommand(string Expiry, SecretCreateMessage? Message, IReadOnlyList<SecretCreateFile> Files, string? Password, string? SecretId = null, Guid? AuditRequestId = null);
+public sealed record CreateSecretCommand(string Expiry, SecretCreateMessage? Message, IReadOnlyList<SecretCreateFile> Files, string? Password, string? SecretId = null, Guid? AuditRequestId = null, string? EmailAddress = null);
 public sealed record CreatedSecret(string Id, DateTimeOffset ExpiresAt, bool PasswordProtected, string RevokeToken);
 public sealed record SecretOpenData(string? MessageNonce, byte[]? MessageCiphertext);
 public sealed record OpenedFileData(StoredFile File, byte[] Ciphertext);
 public sealed record SecretUnlockData(string? MessageNonce, byte[]? MessageCiphertext, IReadOnlyList<OpenedFileData> Files);
 
 public sealed class SecretProtectedException : Exception { }
+public sealed class EmailAddressInvalidException : Exception { }
+public sealed class EmailVerificationUnavailableException : Exception { }
 
 public sealed class SecretApplicationService(
     ISecretRepository repository,
     IBlobStorage blobs,
     PasswordEnvelopeService envelopes,
-    TimeProvider clock)
+    TimeProvider clock,
+    EmailVerificationService? emailVerification = null)
 {
     public Task<StoredSecret?> GetAsync(string id, DateTimeOffset now, CancellationToken cancellationToken = default) =>
         repository.GetAsync(id, now, cancellationToken);
 
     public async Task<CreatedSecret?> CreateAsync(CreateSecretCommand command, CancellationToken cancellationToken = default)
     {
+        string? normalizedEmail = null;
+        if (command.EmailAddress is not null)
+        {
+            if (!EmailAddress.TryNormalize(command.EmailAddress, out var normalized)) throw new EmailAddressInvalidException();
+            normalizedEmail = normalized;
+            if (emailVerification?.CanCreateEmailProtectedSecrets != true) throw new EmailVerificationUnavailableException();
+        }
+
         var secretId = command.SecretId ?? NewId();
         var blobIds = new List<string>();
         var persisted = false;
@@ -81,7 +92,8 @@ public sealed class SecretApplicationService(
                 storedFiles,
                 passwordSession is null ? null : Encode(passwordSession.Salt),
                 messageOuterNonce,
-                revokeTokenHash);
+                revokeTokenHash,
+                normalizedEmail);
             cancellationToken.ThrowIfCancellationRequested();
             if (await repository.CreateAsync(secret, command.AuditRequestId, cancellationToken) is null)
             {

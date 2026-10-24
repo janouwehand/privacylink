@@ -7,12 +7,24 @@ using PrivacyLink.Services;
 
 namespace PrivacyLink.Infrastructure;
 
-internal sealed class UnavailableCreateProofReplayStore : ICreateProofReplayStore
+internal sealed class InMemoryCreateProofReplayStore : ICreateProofReplayStore
 {
+    private const int MaxEntries = 10_000;
+    private readonly Dictionary<string, DateTimeOffset> _entries = new(StringComparer.Ordinal);
+    private readonly object _gate = new();
+
     public Task<CreateProofConsumeResult> TryConsumeAsync(string challengeId, DateTimeOffset expiresAt, DateTimeOffset now, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(CreateProofConsumeResult.Full);
+        lock (_gate)
+        {
+            foreach (var expired in _entries.Where(entry => entry.Value <= now).Select(entry => entry.Key).ToArray())
+                _entries.Remove(expired);
+            if (_entries.ContainsKey(challengeId)) return Task.FromResult(CreateProofConsumeResult.Replay);
+            if (_entries.Count >= MaxEntries) return Task.FromResult(CreateProofConsumeResult.Full);
+            _entries.Add(challengeId, expiresAt);
+            return Task.FromResult(CreateProofConsumeResult.Consumed);
+        }
     }
 }
 

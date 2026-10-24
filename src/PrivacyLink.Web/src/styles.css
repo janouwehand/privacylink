@@ -63,6 +63,9 @@ h2 { font-size: 18px; margin: 0 0 26px; }
 .text-link { padding: 0; border: 0; background: none; color: #426b62; font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; }
 .text-link:hover, .text-link:focus-visible { color: #111; }
 .compose-actions { display: flex; align-items: center; justify-content: flex-start; margin-top: 24px; padding-top: 22px; border-top: 1px solid #d5d5d5; }
+.compose-action-stack { display: grid; justify-items: start; gap: 6px; }
+.compose-status-slot { display: flex; align-items: flex-start; min-height: 18px; }
+.compose-status { color: #777; font-size: 12px; line-height: 18px; }
 .card { max-width: none; width: 100%; background: #fff; border: 0; border-top: 2px solid #16333A; box-shadow: none; padding: 24px 0; }
 .card label { display: block; font-weight: 700; font-size: 13px; margin: 0 0 9px; }
 .compose-layout, .link-settings { display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px; }
@@ -89,6 +92,14 @@ h2 { font-size: 18px; margin: 0 0 26px; }
 .password-action:disabled { color: #aaa; cursor: not-allowed; }
 .password-action svg { display: block; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
 .field-note { display: flex; justify-content: flex-start; gap: 10px; font-size: 12px; color: #777; margin: 8px 0 25px; text-align: left; }
+.email-verification-control { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; min-width: 0; margin-top: 8px; font-size: 12px; }
+.subtle-link { display: inline-flex; align-items: center; min-height: 28px; padding: 0; border: 0; background: transparent; color: #426b62; font: inherit; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.subtle-link:hover:not(:disabled), .subtle-link:focus-visible { color: #16333A; }
+.subtle-link:focus-visible { outline: 2px solid #16333A; outline-offset: 3px; }
+.subtle-link:disabled { color: #888; cursor: wait; }
+.email-verification-summary { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; color: #426b62; overflow-wrap: anywhere; }
+.email-verification-remove { color: #666; font-weight: 500; }
+.password-setting .field-note { margin-bottom: 8px; }
 .field-note.trust-note { margin: 0 0 12px; color: #426b62; font-size: 14px; font-weight: 600; }
 .field-note.unlock-note { margin-top: 8px; font-size: 13px; }
 .file-dropzone { position: relative; min-height: 220px; display: grid; place-items: center; border: 1px dashed #a9c1b9; background: #f6faf8; transition: background .18s ease, border-color .18s ease, box-shadow .18s ease; }
@@ -125,6 +136,27 @@ h2 { font-size: 18px; margin: 0 0 26px; }
 .error { color: #8f1f2d; background: #fff4f4; border: 1px solid #e4bfc3; padding: 12px; border-radius: 0; font-size: 14px; }
 .password-copy-dialog { width: min(520px, calc(100% - 32px)); border: 1px solid #111; border-top: 3px solid #111; padding: 28px; color: #151515; box-shadow: 0 18px 60px rgba(0, 0, 0, .24); }
 .password-copy-dialog::backdrop { background: rgba(17, 17, 17, .48); }
+.email-verification-dialog { width: min(560px, calc(100% - 32px)); max-height: min(90vh, 760px); overflow-y: auto; margin: auto; padding: 28px; border: 1px solid #d8dfdc; border-top: 3px solid #4A9B8D; color: #151515; background: #fff; box-shadow: 0 18px 60px rgba(0, 0, 0, .24); }
+.email-verification-dialog::backdrop { background: rgba(17, 17, 17, .58); }
+.email-verification-dialog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
+.email-verification-dialog-header .eyebrow { margin-bottom: 8px; }
+.email-verification-dialog h2 { margin: 0; font-size: clamp(22px, 4vw, 28px); }
+.email-verification-dialog > p { margin: 0 0 18px; color: #555; font-size: 14px; line-height: 1.6; }
+.email-verification-steps { display: grid; gap: 10px; margin: 0 0 24px; padding-left: 22px; color: #3f4945; font-size: 13px; line-height: 1.55; }
+.email-verification-form > label { display: block; margin: 0 0 8px; color: #263b36; font-size: 13px; font-weight: 700; }
+.email-verification-form > input[type="email"] { display: block; width: 100%; min-height: 48px; margin: 0; padding: 12px 14px; border: 1px solid #bdcbc6; border-radius: 0; background: #fff; color: #151515; font: inherit; outline: none; transition: border-color .16s ease, box-shadow .16s ease; }
+.email-verification-form > input[type="email"]::placeholder { color: #818b87; opacity: 1; }
+.email-verification-form > input[type="email"]:hover { border-color: #849a92; }
+.email-verification-form > input[type="email"]:focus { border-color: #287c70; box-shadow: 0 0 0 3px rgba(74, 155, 141, .2); }
+.email-verification-form .field-note { margin: 9px 0 0; color: #625a3d; }
+.email-verification-prompt { margin-top: 24px; padding-top: 22px; border-top: 1px solid #d5d5d5; }
+.email-verification-prompt h2 { margin: 0 0 10px; }
+.email-verification-prompt > p { color: #555; line-height: 1.55; }
+.email-verification-code-form { display: grid; justify-items: start; gap: 10px; max-width: 380px; margin-top: 18px; }
+.email-verification-code-form label { margin-bottom: 0; }
+.email-verification-code-form input { max-width: 220px; letter-spacing: .18em; }
+.email-verification-code-form .primary { margin-top: 8px; }
+.email-verification-resend { margin-top: 16px; }
 .password-generator-dialog { width: min(640px, calc(100% - 32px)); max-height: min(92vh, 780px); overflow-y: auto; margin: auto; padding: 0; border: 1px solid #d8dfdc; border-top: 3px solid #4A9B8D; color: #151515; background: #fff; box-shadow: 0 18px 60px rgba(0, 0, 0, .24); }
 .password-generator-dialog::backdrop { background: rgba(17, 17, 17, .58); }
 .work-progress-dialog { width: min(500px, calc(100% - 32px)); max-height: min(80vh, 640px); margin: auto; display: none; align-items: flex-start; gap: 18px; border: 1px solid #d8dfdc; border-top: 3px solid #4A9B8D; padding: 26px; color: #151515; background: #fff; box-shadow: 0 18px 60px rgba(0, 0, 0, .24); }
@@ -257,6 +289,8 @@ footer a:hover, footer a:focus-visible { color: #8cc8bb; }
   .generator-actions .primary, .generator-actions .secondary { flex: 1 1 auto; }
   .generator-spacer { display: none; }
   .compose-actions { flex-direction: column; align-items: stretch; }
+  .email-verification-dialog { padding: 22px; }
+  .email-verification-dialog .dialog-actions .primary, .email-verification-dialog .dialog-actions .secondary { width: auto; flex: 1 1 0; }
   .download-list li { align-items: stretch; flex-direction: column; gap: 10px; }
   .download-button { width: 100%; }
   .history-table-wrap { overflow: visible; border: 0; }

@@ -16,3 +16,6 @@
 artifacts/
 data/
 deployment-plan.md
+.tmp-*
+.playwright-mcp/
+graphify-out/
