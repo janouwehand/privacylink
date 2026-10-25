@@ -25,7 +25,6 @@ export class App implements AfterViewInit {
   protected readonly historyPassphraseValid = computed(() => Array.from(this.historyPassphrase()).length >= 12
     && this.historyPassphrase() === this.historyPassphraseConfirmation());
 
-  @ViewChild('passwordCopyDialog') private passwordCopyDialog?: ElementRef<HTMLDialogElement>;
   @ViewChild('emptyMessageDialog') private emptyMessageDialog?: ElementRef<HTMLDialogElement>;
   @ViewChild('historyActionDialog') private historyActionDialog?: ElementRef<HTMLDialogElement>;
   @ViewChild('clearHistoryDialog') private clearHistoryDialog?: ElementRef<HTMLDialogElement>;
@@ -38,7 +37,6 @@ export class App implements AfterViewInit {
   @ViewChild('workProgressDialog') private workProgressDialog?: ElementRef<HTMLDialogElement>;
 
   constructor() {
-    effect(() => this.syncDialog(this.passwordCopyDialog?.nativeElement, this.create.passwordCopyDialogOpen()));
     effect(() => this.syncDialog(this.emptyMessageDialog?.nativeElement, this.create.emptyMessageDialogOpen()));
     effect(() => this.syncDialog(this.historyActionDialog?.nativeElement, this.history.historyActionDialogOpen()));
     effect(() => this.syncDialog(this.clearHistoryDialog?.nativeElement, this.history.clearHistoryDialogOpen()));
@@ -50,7 +48,6 @@ export class App implements AfterViewInit {
   }
 
   ngAfterViewInit(): void {
-    this.syncDialog(this.passwordCopyDialog?.nativeElement, this.create.passwordCopyDialogOpen());
     this.syncDialog(this.emptyMessageDialog?.nativeElement, this.create.emptyMessageDialogOpen());
     this.syncDialog(this.historyActionDialog?.nativeElement, this.history.historyActionDialogOpen());
     this.syncDialog(this.clearHistoryDialog?.nativeElement, this.history.clearHistoryDialogOpen());

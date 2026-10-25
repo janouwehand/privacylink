@@ -19,6 +19,7 @@
       <p>{{ language.t('loading') }}</p>
     } @else if (recipient.metadataReady()) {
       <p class="recipient-expiry">{{ language.t('expires') }} {{ recipient.expiresAt() | date:'medium':undefined:language.dateLocale() }}</p>
+      @if (recipient.emailVerificationRequired() && recipient.passwordProtected()) { <p class="field-note recipient-security-requirements">{{ language.t('bothSecurityRequirements') }}</p> }
 
       @if (!recipient.opened()) {
       @if (recipient.metadataFileCount()) { <p class="field-note">{{ recipient.metadataFileCount() }} {{ language.t('files') }}</p> }

@@ -38,9 +38,10 @@ export class CreateState {
 
   readonly message = signal('');
   readonly password = signal('');
-  readonly passwordVisible = signal(false);
+  readonly passwordDraft = signal('');
+  readonly resultAccessCode = signal('');
   readonly passwordCopied = signal(false);
-  readonly passwordCopyAcknowledged = signal(false);
+  readonly resultAccessCodeCopied = signal(false);
   readonly messageBytes = computed(() => new TextEncoder().encode(this.message()).length);
   readonly messageCharacters = computed(() => Array.from(this.message()).length);
   readonly formattedMessageCharacters = computed(() => this.language.formatNumber(this.messageCharacters()));
@@ -59,7 +60,6 @@ export class CreateState {
   readonly copied = signal(false);
   readonly error = signal<TranslatableError[]>([]);
   readonly errorText = computed(() => this.error().map(error => this.language.translateError(error)).join(' '));
-  readonly passwordCopyDialogOpen = signal(false);
   readonly passwordGeneratorOpen = signal(false);
   readonly emptyMessageDialogOpen = signal(false);
   readonly historyStorageWarning: SecretHistoryStore['saveFailed'] = this.history.saveFailed;
@@ -207,6 +207,7 @@ export class CreateState {
 
   onPageExit(): void {
     this.historyEnabledFromResult.set(false);
+    this.clearResultAccessCode();
     this.stopProof();
     if (this.visibilityListenerRegistered) {
       this.document.removeEventListener('visibilitychange', this.handleVisibilityChange);
@@ -254,9 +255,8 @@ export class CreateState {
   }
 
   updatePassword(event: Event): void {
-    this.password.set((event.target as HTMLInputElement).value);
+    this.passwordDraft.set((event.target as HTMLInputElement).value);
     this.passwordCopied.set(false);
-    this.passwordCopyAcknowledged.set(false);
   }
 
   setRecipientEmail(email: string): void { this.recipientEmail.set(email); }
@@ -266,25 +266,42 @@ export class CreateState {
     this.recipientEmail.set('');
   }
 
-  togglePasswordVisibility(): void { this.passwordVisible.update(visible => !visible); }
+  openPasswordSetup(): void {
+    this.passwordDraft.set(this.password());
+    this.passwordCopied.set(false);
+  }
+
+  savePasswordSetup(): void {
+    this.password.set(this.passwordDraft());
+    this.passwordDraft.set('');
+    this.passwordCopied.set(false);
+  }
+
+  cancelPasswordSetup(): void {
+    this.passwordDraft.set('');
+    this.passwordCopied.set(false);
+  }
+
+  removePassword(): void {
+    this.password.set('');
+    this.cancelPasswordSetup();
+  }
 
   openPasswordGenerator(): void { this.passwordGeneratorOpen.set(true); }
 
   closePasswordGenerator(): void { this.passwordGeneratorOpen.set(false); }
 
   useGeneratedPassword(password: string): void {
-    this.password.set(password);
+    this.passwordDraft.set(password);
     this.passwordCopied.set(false);
-    this.passwordCopyAcknowledged.set(false);
     this.clearError();
     this.passwordGeneratorOpen.set(false);
   }
 
   async copyPassword(): Promise<void> {
-    if (!this.password()) return;
-    if (await this.sharing.copy(this.password())) {
+    if (!this.passwordDraft()) return;
+    if (await this.sharing.copy(this.passwordDraft())) {
       this.passwordCopied.set(true);
-      this.passwordCopyAcknowledged.set(true);
       if (this.passwordCopiedTimeout) clearTimeout(this.passwordCopiedTimeout);
       this.passwordCopiedTimeout = setTimeout(() => this.passwordCopied.set(false), 1200);
     } else {
@@ -361,16 +378,12 @@ export class CreateState {
     }
   }
 
-  async create(skipConfirmation = false, continueWithoutHistory = false): Promise<void> {
+  async create(continueWithoutHistory = false): Promise<void> {
     if (this.busy()) return;
     this.clearError();
     if (!this.message().trim() && this.selectedFiles().length === 0) { this.emptyMessageDialogOpen.set(true); return; }
     if (this.messageCharacters() > MAX_MESSAGE_CHARACTERS || this.messageBytes() > MAX_MESSAGE_BYTES) {
       this.setError({ key: 'tooLarge', params: { max: MAX_MESSAGE_CHARACTERS } });
-      return;
-    }
-    if (!skipConfirmation && this.password() && !this.passwordCopyAcknowledged()) {
-      this.passwordCopyDialogOpen.set(true);
       return;
     }
     if (this.history.locked() && !continueWithoutHistory) {
@@ -399,6 +412,8 @@ export class CreateState {
       decodeCanonical(created.id, 16);
       this.shareLink.set(`${this.document.location.origin}/s/${created.id}#${encrypted.clientKey}`);
       this.expiresAt.set(created.expiresAt);
+      this.resultAccessCode.set(this.password());
+      this.resultAccessCodeCopied.set(false);
       if (saveHistory && !await this.history.add({
           id: created.id,
           createdAt: new Date().toISOString(),
@@ -412,11 +427,10 @@ export class CreateState {
       this.message.set('');
       this.selectedFiles.set([]);
       this.password.set('');
+      this.passwordDraft.set('');
       this.emailVerificationEnabled.set(false);
       this.recipientEmail.set('');
-      this.passwordVisible.set(false);
       this.passwordCopied.set(false);
-      this.passwordCopyAcknowledged.set(false);
       this.stopProof();
     } catch (error) {
       this.setError({ key: error instanceof SecretApiError && error.status === 429 ? 'creationRateLimited' : 'failure' });
@@ -451,25 +465,34 @@ export class CreateState {
   }
 
   share(url = this.shareLink()): void { void this.sharing.share(url); }
-  cancelPasswordCopy(): void { this.passwordCopyDialogOpen.set(false); }
-  continueWithoutCopying(): void { this.passwordCopyDialogOpen.set(false); void this.create(true); }
   cancelLockedHistoryCreation(): void { this.historyLockedDialogOpen.set(false); }
   continueWithoutHistory(): void {
     this.historyLockedDialogOpen.set(false);
-    void this.create(true, true);
+    void this.create(true);
+  }
+
+  async copyResultAccessCode(): Promise<void> {
+    if (!this.resultAccessCode()) return;
+    if (await this.sharing.copy(this.resultAccessCode())) this.resultAccessCodeCopied.set(true);
+    else this.setError({ key: 'clipboardFailure' });
+  }
+
+  private clearResultAccessCode(): void {
+    this.resultAccessCode.set('');
+    this.resultAccessCodeCopied.set(false);
   }
 
   reset(): void {
     this.app.activatePage('create');
+    this.clearResultAccessCode();
     this.shareLink.set('');
     this.historyEnabledFromResult.set(false);
     this.clearError();
     this.copied.set(false);
     this.password.set('');
+    this.passwordDraft.set('');
     this.emailVerificationEnabled.set(false);
     this.recipientEmail.set('');
-    this.passwordVisible.set(false);
     this.passwordCopied.set(false);
-    this.passwordCopyAcknowledged.set(false);
   }
 }

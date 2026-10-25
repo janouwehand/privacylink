@@ -16,6 +16,7 @@ export class CreatePage implements AfterViewInit, OnDestroy {
   protected readonly language = inject(LanguageState);
   protected readonly emailDraft = signal('');
 
+  @ViewChild('accessCodeDialog') private accessCodeDialog?: ElementRef<HTMLDialogElement>;
   @ViewChild('emailVerificationDialog') private emailVerificationDialog?: ElementRef<HTMLDialogElement>;
 
   constructor() {
@@ -28,6 +29,26 @@ export class CreatePage implements AfterViewInit, OnDestroy {
   }
 
   ngOnDestroy(): void { this.create.onPageExit(); }
+
+  openAccessCodeDialog(): void {
+    this.create.openPasswordSetup();
+    const dialog = this.accessCodeDialog?.nativeElement;
+    if (dialog && !dialog.open) {
+      dialog.showModal();
+      dialog.querySelector<HTMLInputElement>('#access-code-input')?.focus();
+    }
+  }
+
+  closeAccessCodeDialog(): void {
+    this.create.cancelPasswordSetup();
+    this.accessCodeDialog?.nativeElement.close();
+  }
+
+  saveAccessCode(event: SubmitEvent): void {
+    event.preventDefault();
+    this.create.savePasswordSetup();
+    this.accessCodeDialog?.nativeElement.close();
+  }
 
   openEmailVerificationDialog(): void {
     this.emailDraft.set(this.create.recipientEmail());
