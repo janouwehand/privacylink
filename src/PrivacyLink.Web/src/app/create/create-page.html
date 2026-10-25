@@ -15,9 +15,7 @@
           <span class="visually-hidden" data-testid="copy-access-code-status" role="status" aria-live="polite" aria-atomic="true">{{ create.resultAccessCodeCopied() ? language.t('accessCodeCopied') : '' }}</span>
         </div>
       }
-    @if (create.historyEnabledFromResult() && !create.historyStorageWarning() && (!create.historyWarning() || create.historyWarning() === 'notSaved')) { <p class="info" role="status">{{ language.t('historyEnabledAfterResult') }}</p> }
-    @else if (create.historyWarning() === 'notSaved' && !create.historyStorageWarning()) { <p class="info" role="status">{{ language.t('historySkippedWarning') }}</p> }
-    @else if (create.historyWarning() || create.historyStorageWarning()) { <p class="error" role="alert">{{ language.t(create.historyWarning() === 'incorrect' ? 'historyPassphraseIncorrect' : create.historyWarning() === 'tooShort' ? 'historyPassphraseTooShort' : create.historyWarning() === 'storage' || create.historyWarning() === 'saveFailed' || create.historyStorageWarning() ? 'historyPersistenceWarning' : 'historyPassphraseFailed') }}</p> }
+    @if (create.historyWarning() || create.historyStorageWarning()) { <p class="error" role="alert">{{ language.t('historyPersistenceWarning') }}</p> }
     @if (create.error().length) { <p class="error" role="alert">{{ create.errorText() }}</p> }
     </section>
     <button class="secondary result-create-another" type="button" (click)="create.reset()">{{ language.t('createAnother') }}</button>

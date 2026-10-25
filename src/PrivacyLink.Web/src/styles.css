@@ -304,6 +304,10 @@ h2 { font-size: 18px; margin: 0 0 26px; }
 .history-link-cell .history-share-action, .history-link-cell .history-open-action { margin-left: -6px; }
 .history-password-cell .icon-action + .history-copy-action { margin-left: -6px; }
 .history-link-cell code { min-width: 130px; max-width: 560px; color: #333; font: 11px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+.history-entry-label { display: block; margin-bottom: 5px; color: #3e5145; font-size: 12px; }
+.history-label-action { margin-top: 5px; padding: 2px 0; font-size: 11px; }
+.history-label-editor { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.history-label-editor input { min-width: 140px; max-width: 100%; padding: 7px 9px; border: 1px solid #bbb; border-radius: 4px; font: inherit; }
 .history-password { min-width: 74px; max-width: 230px; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .icon-action { display: grid; place-items: center; width: 34px; height: 34px; flex: 0 0 auto; padding: 6px; border: 0; background: transparent; color: #555; cursor: pointer; font-size: 18px; }
 .icon-action:hover, .icon-action:focus-visible { background: #16333A; color: #fff; }

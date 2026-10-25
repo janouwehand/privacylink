@@ -5,7 +5,7 @@ import { LinkSharingState } from '../link-sharing-state';
 import { LanguageState } from '../language-state';
 import { SecretApi, SecretApiError } from '../secret-api';
 import { decodeCanonical, derivePasswordToken, encryptMessage } from '../secret-crypto';
-import { HistoryVaultError, SecretHistoryStore } from '../secret-history-store';
+import { SecretHistoryStore } from '../secret-history-store';
 import { WorkProgressState } from '../work-progress-state';
 import { getSecretCryptoWorkerClient } from '../secret-crypto-worker-client';
 import type { TranslatableError } from '../translations';
@@ -66,11 +66,7 @@ export class CreateState {
   readonly emptyMessageDialogOpen = signal(false);
   readonly historyStorageWarning: SecretHistoryStore['saveFailed'] = this.history.saveFailed;
   readonly historyEnabled: SecretHistoryStore['enabled'] = this.history.enabled;
-  readonly historySetupBusy = signal(false);
-  readonly historySetupError = signal<HistoryVaultError | null>(null);
-  readonly historyWarning = signal<HistoryVaultError | 'saveFailed' | 'notSaved' | null>(null);
-  readonly historyEnabledFromResult = signal(false);
-  readonly historyLockedDialogOpen = signal(false);
+  readonly historyWarning = signal<'saveFailed' | null>(null);
   readonly canShare = this.sharing.canShare;
 
   initialize(): void {
@@ -208,7 +204,6 @@ export class CreateState {
   }
 
   onPageExit(): void {
-    this.historyEnabledFromResult.set(false);
     this.clearResultAccessCode();
     this.stopProof();
     if (this.visibilityListenerRegistered) {
@@ -368,19 +363,7 @@ export class CreateState {
   removeFile(index: number): void { if (this.busy()) return; this.selectedFiles.update(files => files.filter((_, fileIndex) => fileIndex !== index)); this.clearError(); }
   selectLink(event: FocusEvent): void { (event.target as HTMLInputElement).select(); }
 
-  async enableHistory(passphrase: string): Promise<boolean> {
-    this.historySetupError.set(null);
-    this.historySetupBusy.set(true);
-    try {
-      const enabled = await this.history.enable(passphrase);
-      if (!enabled) this.historySetupError.set(this.history.error() ?? 'failed');
-      return enabled;
-    } finally {
-      this.historySetupBusy.set(false);
-    }
-  }
-
-  async create(continueWithoutHistory = false): Promise<void> {
+  async create(): Promise<void> {
     if (this.busy()) return;
     this.clearError();
     if (!this.message().trim() && this.selectedFiles().length === 0) { this.emptyMessageDialogOpen.set(true); return; }
@@ -388,17 +371,13 @@ export class CreateState {
       this.setError({ key: 'tooLarge', params: { max: MAX_MESSAGE_CHARACTERS } });
       return;
     }
-    if (this.history.locked() && !continueWithoutHistory) {
-      this.historyLockedDialogOpen.set(true);
-      return;
-    }
-
     this.busy.set(true);
     const filesToEncrypt = this.selectedFiles();
     this.workProgress.begin('create', filesToEncrypt.map(file => file.name));
     try {
       this.historyWarning.set(null);
-      const saveHistory = this.history.enabled() && this.history.unlocked();
+      await this.history.whenReady();
+      const saveHistory = this.history.enabled();
       const encrypted = await encryptMessage(this.message());
       const clientKey = decodeCanonical(encrypted.clientKey, 32);
       const requestWithoutFiles = {
@@ -425,7 +404,6 @@ export class CreateState {
           password: this.password(),
           revokeToken: created.revokeToken
         })) this.historyWarning.set('saveFailed');
-      else if (continueWithoutHistory && this.history.enabled() && !saveHistory) this.historyWarning.set('notSaved');
       this.app.activateResult();
       this.message.set('');
       this.selectedFiles.set([]);
@@ -477,12 +455,6 @@ export class CreateState {
   }
 
   share(url = this.shareLink()): void { void this.sharing.share(url); }
-  cancelLockedHistoryCreation(): void { this.historyLockedDialogOpen.set(false); }
-  continueWithoutHistory(): void {
-    this.historyLockedDialogOpen.set(false);
-    void this.create(true);
-  }
-
   async copyResultAccessCode(): Promise<void> {
     if (!this.resultAccessCode()) return;
     if (await this.sharing.copy(this.resultAccessCode())) {
@@ -504,7 +476,6 @@ export class CreateState {
     this.clearResultAccessCode();
     this.clearLinkCopiedFeedback();
     this.shareLink.set('');
-    this.historyEnabledFromResult.set(false);
     this.clearError();
     this.password.set('');
     this.passwordDraft.set('');

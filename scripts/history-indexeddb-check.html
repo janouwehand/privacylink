@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>IndexedDB CryptoKey persistence check</title></head>
+<body data-result="pending">
+<script>
+const databaseName = 'privacylink.history-browser-check.v1';
+const secret = {
+  id: 'browser-check-secret',
+  createdAt: '2026-10-25T00:00:00.000Z',
+  expiresAt: '2030-01-01T00:00:00.000Z',
+  link: 'https://example.test/s/secret#private-client-key',
+  password: 'private-access-code',
+  revokeToken: 'private-revoke-token',
+  givenLabel: 'Browser persistence check'
+};
+const encode = value => new TextEncoder().encode(value);
+const buffer = value => Uint8Array.from(value).buffer;
+function requestResult(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+function openDatabase() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(databaseName, 1);
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore('entries', { keyPath: 'id' });
+      request.result.createObjectStore('metadata');
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+function transactionDone(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+}
+async function run() {
+  const database = await openDatabase();
+  if (location.pathname === '/write') {
+    const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const metadata = {
+      id: secret.id,
+      version: 1,
+      createdAt: secret.createdAt,
+      expiresAt: secret.expiresAt
+    };
+    const additionalData = encode(JSON.stringify([databaseName, metadata.version, metadata.id, metadata.createdAt, metadata.expiresAt]));
+    const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData }, key, encode(JSON.stringify(secret)));
+    const transaction = database.transaction(['entries', 'metadata'], 'readwrite');
+    transaction.objectStore('metadata').put(key, 'encryptionKey');
+    transaction.objectStore('entries').put({ ...metadata, iv: iv.buffer, ciphertext });
+    await transactionDone(transaction);
+    let exportRejected = false;
+    try { await crypto.subtle.exportKey('raw', key); }
+    catch { exportRejected = true; }
+    document.body.dataset.exportRejected = String(exportRejected);
+    document.body.dataset.result = 'written';
+    document.body.textContent = 'IndexedDB entry written in the first page context.';
+  } else {
+    const key = await requestResult(database.transaction('metadata', 'readonly').objectStore('metadata').get('encryptionKey'));
+    const record = await requestResult(database.transaction('entries', 'readonly').objectStore('entries').get(secret.id));
+    if (!key || !record || key.extractable !== false) throw new Error('Persisted key or entry is missing or extractable');
+    const additionalData = encode(JSON.stringify([databaseName, record.version, record.id, record.createdAt, record.expiresAt]));
+    const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: record.iv, additionalData }, key, record.ciphertext);
+    const restored = JSON.parse(new TextDecoder().decode(plaintext));
+    if (restored.link !== secret.link || restored.password !== secret.password || restored.revokeToken !== secret.revokeToken || restored.givenLabel !== secret.givenLabel) {
+      throw new Error('The reloaded page could not decrypt all saved fields');
+    }
+    let exportRejected = false;
+    try { await crypto.subtle.exportKey('raw', key); }
+    catch { exportRejected = true; }
+    if (!exportRejected) throw new Error('Exporting the persisted key unexpectedly succeeded');
+    document.body.dataset.exportRejected = 'true';
+    document.body.dataset.result = 'passed';
+    document.body.textContent = 'Passed: the new page decrypted the saved entry and key export was rejected.';
+  }
+}
+run().catch(error => {
+  document.body.dataset.error = String(error && error.stack || error);
+  document.body.dataset.result = 'failed';
+  document.body.textContent = 'Failed: ' + String(error && error.message || error);
+});
+</script>
+</body>
+</html>
