@@ -765,7 +765,18 @@ describe('App', () => {
     await fixture.whenStable();
     fixture.detectChanges();
     expect(copySpy).toHaveBeenCalledWith(accessCode);
-    expect(compiled.querySelector<HTMLButtonElement>('[data-testid="copy-result-access-code"]')?.textContent).toContain('Access code copied');
+    const copyAccessCodeButton = compiled.querySelector<HTMLButtonElement>('[data-testid="copy-result-access-code"]');
+    expect(copyAccessCodeButton?.getAttribute('aria-label')).toBe('Copy access code');
+    expect(copyAccessCodeButton?.textContent?.trim()).toBe('');
+    expect(copyAccessCodeButton?.classList.contains('is-copied')).toBe(true);
+
+    compiled.querySelector<HTMLButtonElement>('[data-testid="copy-result-link"]')!.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(copySpy).toHaveBeenCalledWith(create.shareLink());
+    const copyLinkButton = compiled.querySelector<HTMLButtonElement>('[data-testid="copy-result-link"]');
+    expect(copyLinkButton?.getAttribute('aria-label')).toBe('Copy link');
+    expect(copyLinkButton?.classList.contains('is-copied')).toBe(true);
 
     await TestBed.inject(Router).navigateByUrl('/security');
     await fixture.whenStable();
@@ -780,7 +791,7 @@ describe('App', () => {
     await create.create();
     fixture.detectChanges();
     expect(create.resultAccessCode()).toBe('next-secret-code');
-    compiled.querySelector<HTMLButtonElement>('.text-button')!.click();
+    compiled.querySelector<HTMLButtonElement>('.result-create-another')!.click();
     fixture.detectChanges();
     expect(create.resultAccessCode()).toBe('');
   });
