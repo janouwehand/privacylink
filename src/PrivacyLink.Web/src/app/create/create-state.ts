@@ -28,7 +28,9 @@ export class CreateState {
   private readonly sharing = inject(LinkSharingState);
   private readonly workProgress = inject(WorkProgressState);
   private readonly document = inject(DOCUMENT);
+  private linkCopiedTimeout: ReturnType<typeof setTimeout> | undefined;
   private passwordCopiedTimeout: ReturnType<typeof setTimeout> | undefined;
+  private resultAccessCodeCopiedTimeout: ReturnType<typeof setTimeout> | undefined;
   private preparedProof: { header: string; monotonicDeadline: number } | undefined;
   private proofController: AbortController | undefined;
   private proofTask: Promise<void> | undefined;
@@ -412,6 +414,7 @@ export class CreateState {
       decodeCanonical(created.id, 16);
       this.shareLink.set(`${this.document.location.origin}/s/${created.id}#${encrypted.clientKey}`);
       this.expiresAt.set(created.expiresAt);
+      this.clearLinkCopiedFeedback();
       this.resultAccessCode.set(this.password());
       this.resultAccessCodeCopied.set(false);
       if (saveHistory && !await this.history.add({
@@ -460,8 +463,17 @@ export class CreateState {
   }
 
   async copy(): Promise<void> {
-    if (await this.sharing.copy(this.shareLink())) this.copied.set(true);
-    else this.setError({ key: 'clipboardFailure' });
+    if (await this.sharing.copy(this.shareLink())) {
+      this.copied.set(true);
+      if (this.linkCopiedTimeout) clearTimeout(this.linkCopiedTimeout);
+      this.linkCopiedTimeout = setTimeout(() => this.copied.set(false), 1000);
+    } else this.setError({ key: 'clipboardFailure' });
+  }
+
+  private clearLinkCopiedFeedback(): void {
+    if (this.linkCopiedTimeout) clearTimeout(this.linkCopiedTimeout);
+    this.linkCopiedTimeout = undefined;
+    this.copied.set(false);
   }
 
   share(url = this.shareLink()): void { void this.sharing.share(url); }
@@ -473,11 +485,16 @@ export class CreateState {
 
   async copyResultAccessCode(): Promise<void> {
     if (!this.resultAccessCode()) return;
-    if (await this.sharing.copy(this.resultAccessCode())) this.resultAccessCodeCopied.set(true);
-    else this.setError({ key: 'clipboardFailure' });
+    if (await this.sharing.copy(this.resultAccessCode())) {
+      this.resultAccessCodeCopied.set(true);
+      if (this.resultAccessCodeCopiedTimeout) clearTimeout(this.resultAccessCodeCopiedTimeout);
+      this.resultAccessCodeCopiedTimeout = setTimeout(() => this.resultAccessCodeCopied.set(false), 1000);
+    } else this.setError({ key: 'clipboardFailure' });
   }
 
   private clearResultAccessCode(): void {
+    if (this.resultAccessCodeCopiedTimeout) clearTimeout(this.resultAccessCodeCopiedTimeout);
+    this.resultAccessCodeCopiedTimeout = undefined;
     this.resultAccessCode.set('');
     this.resultAccessCodeCopied.set(false);
   }
@@ -485,10 +502,10 @@ export class CreateState {
   reset(): void {
     this.app.activatePage('create');
     this.clearResultAccessCode();
+    this.clearLinkCopiedFeedback();
     this.shareLink.set('');
     this.historyEnabledFromResult.set(false);
     this.clearError();
-    this.copied.set(false);
     this.password.set('');
     this.passwordDraft.set('');
     this.emailVerificationEnabled.set(false);

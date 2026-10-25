@@ -52,6 +52,8 @@ main { width: 100%; max-width: 1280px; padding: 52px 30px 90px; margin: 0 auto; 
 .shell.security-mode .hero p { max-width: none; }
 .hero { text-align: left; margin-bottom: 26px; }
 .hero.compact { margin-bottom: 26px; }
+.result-page { width: 100%; max-width: 820px; margin: 0 auto; }
+.result-page .hero { margin-bottom: 30px; }
 .hero-accent { color: #4A9B8D; }
 .eyebrow { text-transform: uppercase; letter-spacing: .16em; color: #777; font-size: 11px; font-weight: 800; margin-bottom: 15px; }
 h1, h2 { letter-spacing: -.045em; }
@@ -101,16 +103,40 @@ h2 { font-size: 18px; margin: 0 0 26px; }
 .security-option-action:hover:not(:disabled), .security-option-action:focus-visible { background: #eef5f2; }
 .security-option-action:focus-visible { outline: 2px solid #16333A; outline-offset: 3px; }
 .security-option-action:disabled { opacity: .6; cursor: wait; }
-.result-access-code { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; margin-top: 24px; }
-.result-access-code label { grid-column: 1 / -1; margin-bottom: -2px; }
-.result-access-code button { min-height: 46px; }
-.result-access-code + .field-note { margin-top: 20px; }
 .access-code-form > label { display: block; margin: 0 0 8px; color: #263b36; font-size: 13px; font-weight: 700; }
 .access-code-form > .field-note { display: block; margin: 8px 0 24px; line-height: 1.5; }
 .card textarea, .card select, .card input { display: block; width: 100%; font: inherit; border: 1px solid #aaa; border-radius: 0; background: #fff; color: #111; padding: 13px 15px; outline: none; }
 .card textarea { resize: vertical; min-height: 220px; line-height: 1.5; }
 .card textarea:focus, .card select:focus, .card input:focus { border-color: #111; box-shadow: 0 0 0 2px #111; }
 .card input, .card select { margin-bottom: 0; }
+.result-card { padding: 24px; border: 1px solid #d9e0de; border-top: 3px solid #16333A; }
+.result-link-section { padding-bottom: 24px; border-bottom: 1px solid #e1e6e4; }
+.result-link-section > label, .result-access-code-copy label { display: block; margin: 0 0 9px; font-size: 13px; font-weight: 700; }
+.result-link-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 16px; margin-bottom: 9px; }
+.result-link-heading > label { margin: 0; }
+.result-link-heading .result-expiry { display: block; margin: 0 0 0 auto; text-align: right; }
+.result-link-field { display: flex; align-items: stretch; min-width: 0; border: 1px solid #aaa; background: #fff; }
+.result-link-field:focus-within { border-color: #111; box-shadow: 0 0 0 2px #111; }
+.result-link-field input { min-width: 0; flex: 1 1 auto; border: 0; }
+.result-link-field input:focus { border-color: transparent; box-shadow: none; }
+.result-link-field input { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.result-link-field .password-action { flex: 0 0 44px; width: 44px; border-left: 1px solid #aaa; }
+.result-link-field .password-action:focus-visible { outline: 2px solid #16333A; outline-offset: -3px; }
+.result-actions { margin-top: 12px; }
+.result-access-code { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px 14px; margin-top: 22px; }
+.result-access-code-copy { grid-column: 1 / -1; }
+.result-access-code-copy label { margin-bottom: 4px; }
+.result-access-code-copy .field-note { display: block; margin: 0; line-height: 1.5; }
+.result-access-code-field { display: flex; align-items: stretch; min-width: 0; max-width: 520px; border: 1px solid #aaa; background: #fff; }
+.result-access-code-field input { min-width: 0; flex: 1 1 auto; border: 0; }
+.result-access-code-field input:focus { border-color: transparent; box-shadow: none; }
+.result-access-code-field:focus-within { border-color: #111; box-shadow: 0 0 0 2px #111; }
+.result-access-code-field .password-action { flex: 0 0 44px; width: 44px; border-left: 1px solid #aaa; }
+.result-access-code-field .password-action:focus-visible { outline: 2px solid #16333A; outline-offset: -3px; }
+.result-expiry { margin: 0; }
+.result-card .info, .result-card .error { margin: 18px 0 0; }
+.result-create-another { margin-top: 18px; }
+.result-create-another:hover, .result-create-another:focus-visible { background: #eef5f2; }
 .access-code-field { display: flex; align-items: stretch; border: 1px solid #aaa; background: #fff; }
 .access-code-field:focus-within { border-color: #111; box-shadow: 0 0 0 2px #111; }
 .access-code-field input { flex: 1 1 auto; width: auto; min-width: 0; padding: 13px 15px; border: 0; }
@@ -315,6 +341,7 @@ h2 { font-size: 18px; margin: 0 0 26px; }
 .opened-recipient-hero { margin-bottom: 18px; }
 .opened-recipient-hero h1 { font-size: clamp(30px, 3.2vw, 40px); }
 .recipient-expiry { margin: 0 0 24px; color: #666; font-size: 13px; }
+.recipient-card #unlock-password { max-width: 520px; }
 .opened-content-grid { display: grid; gap: 28px; }
 .opened-content-grid h2 { margin: 0 0 12px; }
 .opened-message-section, .opened-files-section { min-width: 0; }
@@ -331,6 +358,7 @@ footer a:hover, footer a:focus-visible { color: #8cc8bb; }
   .hero p { font-size: 15px; }
   .field-note { flex-wrap: wrap; }
   .card .primary { width: 100%; }
+  .result-actions > button { width: auto; flex: 1 1 0; }
   .generator { padding: 20px 16px; }
   .generator-actions { align-items: stretch; }
   .generator-actions .primary, .generator-actions .secondary { flex: 1 1 auto; }
@@ -344,8 +372,10 @@ footer a:hover, footer a:focus-visible { color: #8cc8bb; }
   .security-disclosure-chevron { grid-column: 3; grid-row: 1 / span 2; }
   .email-verification-dialog { padding: 22px; }
   .email-verification-dialog .dialog-actions .primary, .email-verification-dialog .dialog-actions .secondary { width: auto; flex: 1 1 0; }
+  .result-card { padding: 20px 16px; }
   .result-access-code { grid-template-columns: minmax(0, 1fr); }
-  .result-access-code label { grid-column: 1; }
+  .result-access-code-copy { grid-column: 1; }
+  .result-create-another { width: 100%; }
   .security-option { flex-direction: column; align-items: flex-start; }
   .download-list li { align-items: stretch; flex-direction: column; gap: 10px; }
   .download-button { width: 100%; }

@@ -1,14 +1,25 @@
 @if (app.mode() === 'result') {
-  <section class="hero compact"><div class="eyebrow">{{ language.t('readyEyebrow') }}</div><h1 id="page-title" tabindex="-1">{{ language.t('ready') }}</h1><p>{{ language.t('readyIntro') }}</p></section>
-  <section class="card"><label for="share-link">{{ language.t('secureLink') }}</label><input id="share-link" type="text" readonly [value]="create.shareLink()" (focus)="create.selectLink($event)"><div class="actions"><button class="primary" type="button" (click)="create.copy()">{{ create.copied() ? language.t('copied') : language.t('copy') }}</button>@if (create.canShare) { <button class="secondary" type="button" (click)="create.share()">{{ language.t('share') }}</button> }</div>
-    @if (create.resultAccessCode()) { <div class="result-access-code"><label for="result-access-code">{{ language.t('accessCode') }}</label><input id="result-access-code" type="text" readonly autocomplete="off" [value]="create.resultAccessCode()"><button class="secondary" type="button" data-testid="copy-result-access-code" (click)="create.copyResultAccessCode()">{{ create.resultAccessCodeCopied() ? language.t('accessCodeCopied') : language.t('copyAccessCode') }}</button></div> }
-    <p class="field-note">{{ language.t('expires') }} {{ create.expiresAt() | date:'medium':undefined:language.dateLocale() }}</p>
+  <div class="result-page">
+    <section class="hero compact"><div class="eyebrow">{{ language.t('readyEyebrow') }}</div><h1 id="page-title" tabindex="-1">{{ language.t('ready') }}</h1><p>{{ language.t('readyIntro') }}</p></section>
+    <section class="card result-card">
+      <div class="result-link-section">
+        <div class="result-link-heading"><label for="share-link">{{ language.t('secureLink') }}</label><p class="field-note result-expiry">{{ language.t('expires') }} {{ create.expiresAt() | date:'medium':undefined:language.dateLocale() }}</p></div>
+        <div class="result-link-field"><input id="share-link" type="text" readonly [value]="create.shareLink()" (focus)="create.selectLink($event)"><button class="password-action" type="button" [class.is-copied]="create.copied()" data-testid="copy-result-link" (click)="create.copy()" [attr.aria-label]="language.t('copyLink')" [title]="language.t('copyLink')"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="12" rx="1"></rect><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h3"></path></svg></button></div>
+        @if (create.canShare) { <div class="actions result-actions"><button class="secondary" type="button" (click)="create.share()">{{ language.t('share') }}</button></div> }
+      </div>
+      @if (create.resultAccessCode()) {
+        <div class="result-access-code">
+          <div class="result-access-code-copy"><label for="result-access-code">{{ language.t('accessCode') }}</label><p class="field-note">{{ language.t('accessCodeShareSeparately') }}</p></div>
+          <div class="result-access-code-field"><input id="result-access-code" type="text" readonly autocomplete="off" [value]="create.resultAccessCode()"><button class="password-action" type="button" [class.is-copied]="create.resultAccessCodeCopied()" data-testid="copy-result-access-code" (click)="create.copyResultAccessCode()" [attr.aria-label]="language.t('copyAccessCode')" [title]="language.t('copyAccessCode')"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="12" rx="1"></rect><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h3"></path></svg></button></div>
+        </div>
+      }
     @if (create.historyEnabledFromResult() && !create.historyStorageWarning() && (!create.historyWarning() || create.historyWarning() === 'notSaved')) { <p class="info" role="status">{{ language.t('historyEnabledAfterResult') }}</p> }
     @else if (create.historyWarning() === 'notSaved' && !create.historyStorageWarning()) { <p class="info" role="status">{{ language.t('historySkippedWarning') }}</p> }
     @else if (create.historyWarning() || create.historyStorageWarning()) { <p class="error" role="alert">{{ language.t(create.historyWarning() === 'incorrect' ? 'historyPassphraseIncorrect' : create.historyWarning() === 'tooShort' ? 'historyPassphraseTooShort' : create.historyWarning() === 'storage' || create.historyWarning() === 'saveFailed' || create.historyStorageWarning() ? 'historyPersistenceWarning' : 'historyPassphraseFailed') }}</p> }
     @if (create.error().length) { <p class="error" role="alert">{{ create.errorText() }}</p> }
-  </section>
-  <button class="text-button" type="button" (click)="create.reset()">{{ language.t('createAnother') }}</button>
+    </section>
+    <button class="secondary result-create-another" type="button" (click)="create.reset()">{{ language.t('createAnother') }}</button>
+  </div>
 } @else {
   <section class="hero"><div class="eyebrow">{{ language.t('eyebrow') }}</div><h1 id="page-title" tabindex="-1">{{ language.t('heroBefore') }} <span class="hero-accent">{{ language.t('heroAccent') }}</span></h1></section>
   <p class="security-summary">{{ language.t('securitySummary') }} <a class="text-link" routerLink="/security">{{ language.t('securityDetailsLink') }}</a></p>

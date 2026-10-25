@@ -1,6 +1,6 @@
 <div class="shell variant-c" [class.history-mode]="app.mode() === 'history'" [class.security-mode]="app.mode() === 'security'" [class.generator-mode]="app.mode() === 'password-generator'" [class.admin-mode]="app.mode() === 'admin'">
   <header class="topbar">
-    <a class="brand" routerLink="/" [attr.aria-label]="language.t('brandHome')"><img class="brand-mark" src="/privacylink-mark.svg" alt=""> <span>PrivacyLink</span></a>
+    <a class="brand" routerLink="/" (click)="create.reset()" [attr.aria-label]="language.t('brandHome')"><img class="brand-mark" src="/privacylink-mark.svg" alt=""> <span>PrivacyLink</span></a>
     <div class="header-tools">
       @if (app.mode() === 'history' || app.mode() === 'security' || app.mode() === 'security-details') {
         <a class="history-nav-link" routerLink="/"><span>{{ app.mode() === 'history' ? language.t('newLink') : language.t('securityBackLink') }}</span></a>
