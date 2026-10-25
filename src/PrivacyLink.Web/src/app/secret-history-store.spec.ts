@@ -186,6 +186,31 @@ describe('SecretHistoryStore', () => {
     }
   });
 
+  it('warns and retries when deleting an expired record temporarily fails', async () => {
+    const store = await createStore();
+    vi.useFakeTimers();
+    try {
+      storage.failNextDelete = true;
+
+      expect(await store.add({ ...entry('expired-secret'), expiresAt: new Date(Date.now() - 1_000).toISOString() })).toBe(true);
+      expect(store.entries()).toEqual([]);
+      expect(store.expiryCleanupFailed()).toBe(true);
+      expect(storage.records.has('expired-secret')).toBe(true);
+      expect(storage.deleteCalls).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      vi.useRealTimers();
+
+      await vi.waitFor(() => {
+        expect(storage.deleteCalls).toBe(2);
+        expect(storage.records.has('expired-secret')).toBe(false);
+        expect(store.expiryCleanupFailed()).toBe(false);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('clears records but keeps saving enabled and the local key', async () => {
     const store = await createStore();
     await store.add(entry('secret-one'));

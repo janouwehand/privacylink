@@ -44,6 +44,7 @@ const ENCRYPTION_KEY = 'encryptionKey';
 const ENCRYPTION_KEY_ID = 'encryptionKeyId';
 const HISTORY_EPOCH = 'historyEpoch';
 const MUTATION_LOCK_NAME = 'privacylink:sender-history:v1';
+const EXPIRY_CLEANUP_RETRY_DELAY = 60_000;
 
 export type HistoryVaultError = 'storage' | 'unavailable';
 
@@ -234,6 +235,7 @@ export class SecretHistoryStore {
   readonly entries = this.mutableEntries.asReadonly();
   readonly initialized = signal(false);
   readonly unavailableEntries = this.unavailable.asReadonly();
+  readonly expiryCleanupFailed = signal(false);
   readonly locked = signal(false);
   readonly unlocked = signal(true);
   readonly error = signal<HistoryVaultError | null>(null);
@@ -288,6 +290,7 @@ export class SecretHistoryStore {
         this.epoch = await this.storage.clearEntries();
         this.mutableEntries.set([]);
         this.unavailable.set(0);
+        this.expiryCleanupFailed.set(false);
         this.error.set(null);
         this.saveFailed.set(false);
         this.cancelExpiryCleanup();
@@ -411,12 +414,16 @@ export class SecretHistoryStore {
   ): Promise<void> {
     const entries: SecretHistoryEntry[] = [];
     let unavailable = 0;
+    let expiryCleanupFailed = false;
     await Promise.all(records.map(async record => {
       if (!isStoredEntry(record)) { unavailable++; return; }
       try {
         const entry = await decryptEntry(record, key);
         if (isUnexpired(entry.expiresAt)) entries.push(entry);
-        else await this.storage.deleteEntryIfCurrent(record.id, record.ciphertext).catch(() => false);
+        else {
+          try { await this.storage.deleteEntryIfCurrent(record.id, record.ciphertext); }
+          catch { expiryCleanupFailed = true; }
+        }
       }
       catch { unavailable++; }
     }));
@@ -432,9 +439,10 @@ export class SecretHistoryStore {
     }
     this.mutableEntries.set(entries);
     this.unavailable.set(unavailable);
+    this.expiryCleanupFailed.set(expiryCleanupFailed);
     if (unavailable) this.error.set('unavailable');
     else if (this.error() === 'unavailable') this.error.set(null);
-    this.scheduleExpiryCleanup(records);
+    this.scheduleExpiryCleanup(records, expiryCleanupFailed);
   }
 
   private async mutate<T>(operation: (key: CryptoKey, keyId: string, epoch: number) => Promise<T>): Promise<T | false> {
@@ -498,18 +506,20 @@ export class SecretHistoryStore {
     return result;
   }
 
-  private scheduleExpiryCleanup(records: EncryptedHistoryRecord[]): void {
+  private scheduleExpiryCleanup(records: EncryptedHistoryRecord[], retryFailedDeletion = false): void {
     this.cancelExpiryCleanup();
     const nearestExpiry = Math.min(...records.filter(isStoredEntry)
       .map(record => Date.parse(record.expiresAt)).filter(value => Number.isFinite(value) && value > Date.now()));
-    if (!Number.isFinite(nearestExpiry)) return;
-    const delay = Math.min(Math.max(0, nearestExpiry - Date.now()), 2_147_000_000);
-    this.expiryCleanupTimeout = setTimeout(() => {
+    if (!retryFailedDeletion && !Number.isFinite(nearestExpiry)) return;
+    const retryDelay = retryFailedDeletion ? EXPIRY_CLEANUP_RETRY_DELAY : Number.POSITIVE_INFINITY;
+    const delay = Math.min(retryDelay, Number.isFinite(nearestExpiry) ? Math.max(0, nearestExpiry - Date.now()) : Number.POSITIVE_INFINITY, 2_147_000_000);
+    if (!Number.isFinite(delay)) return;
+    this.expiryCleanupTimeout = setTimeout(async () => {
       this.expiryCleanupTimeout = undefined;
-      void this.pruneExpired().then(result => {
-        if (!result) this.saveFailed.set(true);
-        void this.refresh();
-      });
+      if (!await this.pruneExpired()) {
+        this.saveFailed.set(true);
+        await this.refresh();
+      }
     }, delay);
   }
 

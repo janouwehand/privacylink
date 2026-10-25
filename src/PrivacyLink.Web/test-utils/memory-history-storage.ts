@@ -4,6 +4,8 @@ export class MemoryHistoryStorage implements SecretHistoryStorage {
   readonly metadata = new Map<string, unknown>();
   readonly records = new Map<string, EncryptedHistoryRecord>();
   failWrites = false;
+  failNextDelete = false;
+  deleteCalls = 0;
   private pendingAddGate?: { started: () => void; wait: Promise<void>; release: () => void };
   private pendingEntriesGate?: { started: () => void; wait: Promise<void>; release: () => void };
 
@@ -71,6 +73,11 @@ export class MemoryHistoryStorage implements SecretHistoryStorage {
   }
 
   async deleteEntryIfCurrent(id: string, expectedCiphertext: ArrayBuffer): Promise<boolean> {
+    this.deleteCalls++;
+    if (this.failNextDelete) {
+      this.failNextDelete = false;
+      throw new Error('Storage unavailable');
+    }
     const current = this.records.get(id);
     if (!current || !equalBytes(current.ciphertext, expectedCiphertext)) return false;
     return this.records.delete(id);

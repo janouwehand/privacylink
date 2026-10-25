@@ -13,6 +13,7 @@ export class HistoryState {
 
   readonly secretHistory: SecretHistoryStore['entries'];
   readonly historyStorageWarning: SecretHistoryStore['saveFailed'];
+  readonly expiryCleanupFailed: SecretHistoryStore['expiryCleanupFailed'];
   readonly storeUnavailable: SecretHistoryStore['unavailableEntries'];
   readonly visibleHistoryPasswords = signal<Set<string>>(new Set());
   readonly historyCopiedId = signal('');
@@ -31,6 +32,7 @@ export class HistoryState {
   constructor() {
     this.secretHistory = this.store.entries;
     this.historyStorageWarning = this.store.saveFailed;
+    this.expiryCleanupFailed = this.store.expiryCleanupFailed;
     this.storeUnavailable = this.store.unavailableEntries;
   }
 

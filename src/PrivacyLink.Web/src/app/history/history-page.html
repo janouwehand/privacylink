@@ -2,6 +2,7 @@
 <section class="card history-page-card">
   <p class="history-privacy-note">{{ language.t('historyPrivacy') }}</p>
   @if (history.historyStorageWarning()) { <p class="error" role="alert">{{ language.t('historyStorageFailed') }}</p> }
+  @if (history.expiryCleanupFailed()) { <p class="error" role="alert">{{ language.t('historyCleanupFailed') }}</p> }
   @if (history.storeUnavailable()) { <p class="error" role="alert">{{ language.t('historyUnavailable', { count: history.storeUnavailable() }) }}</p> }
   @if (history.historyCopyFailed()) { <p class="error" role="alert">{{ language.t('clipboardFailure') }}</p> }
   @if (history.historyRevokeFailed()) { <p class="error" role="alert">{{ language.t('historyRevokeFailed') }}</p> }
