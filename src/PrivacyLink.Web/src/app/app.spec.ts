@@ -12,8 +12,9 @@ import { LinkSharingState } from './link-sharing-state';
 import { RecipientState } from './recipient/recipient-state';
 import { RecipientPage } from './recipient/recipient-page';
 import { SecretApi, SecretApiError } from './secret-api';
-import { SecretHistoryStore } from './secret-history-store';
+import { SECRET_HISTORY_STORAGE, SecretHistoryStore } from './secret-history-store';
 import { installTestWebLocks } from '../../test-utils/web-locks';
+import { MemoryHistoryStorage } from '../../test-utils/memory-history-storage';
 import { decodeCanonical, decryptFile, decryptFileName, decryptMessage, encryptFile, encryptMessage } from './secret-crypto';
 
 class InlineCryptoWorker extends EventTarget {
@@ -80,6 +81,7 @@ function createSecretApiStub() {
 
 describe('App', () => {
   let api: ReturnType<typeof createSecretApiStub>;
+  let historyStorage: MemoryHistoryStorage;
   let addedDialogMethods = false;
   let restoreWebLocks: (() => void) | undefined;
 
@@ -91,13 +93,15 @@ describe('App', () => {
       Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.removeAttribute('open'); this.dispatchEvent(new Event('close')); } });
     }
     localStorage.clear();
+    historyStorage = new MemoryHistoryStorage();
     vi.stubGlobal('Worker', InlineCryptoWorker);
     api = createSecretApiStub();
     await TestBed.configureTestingModule({
       imports: [App],
       providers: [
         provideRouter(routes),
-        { provide: SecretApi, useValue: api }
+        { provide: SecretApi, useValue: api },
+        { provide: SECRET_HISTORY_STORAGE, useValue: historyStorage }
       ]
     })
       .compileComponents();
@@ -798,274 +802,157 @@ describe('App', () => {
     expect(create.resultAccessCode()).toBe('');
   });
 
-  it('stores no sender history unless the user opts in', async () => {
+  it('automatically saves newly created links as encrypted history entries', async () => {
     const fixture = await renderApp();
     const create = TestBed.inject(CreateState);
-    create.message.set('Do not retain this message');
-    await create.create();
-    fixture.detectChanges();
-
-    expect(TestBed.inject(AppState).mode()).toBe('result');
-    expect(localStorage.getItem('privacylink.secret-history.v1')).toBeNull();
-    expect(localStorage.getItem('privacylink.secret-history.v2')).toBeNull();
-    expect(localStorage.getItem('privacylink.secret-history.v3')).toBeNull();
-    expect(localStorage.getItem('privacylink.secret-history.credential.v2')).toBeNull();
-  });
-
-  it('stores opted-in history only as ciphertext after passphrase setup', async () => {
-    const fixture = await renderApp();
-    const create = TestBed.inject(CreateState);
+    const store = TestBed.inject(SecretHistoryStore);
+    await store.whenReady();
     create.message.set('History secret text');
     create.password.set('History secret password');
-    const compiled = fixture.nativeElement as HTMLElement;
-    compiled.querySelector<HTMLButtonElement>('.header-tools .history-nav-link')!.click();
-    expect(compiled.querySelector('#history-opt-in-description')?.textContent).toContain('History contains the full link');
-    const passphraseInput = compiled.querySelector<HTMLInputElement>('#history-passphrase')!;
-    const confirmationInput = compiled.querySelector<HTMLInputElement>('#history-passphrase-confirmation')!;
-    passphraseInput.value = 'violet lantern river meadow';
-    passphraseInput.dispatchEvent(new Event('input'));
-    confirmationInput.value = 'violet lantern river meadow';
-    confirmationInput.dispatchEvent(new Event('input'));
-    fixture.detectChanges();
-    compiled.querySelector<HTMLButtonElement>('.history-opt-in-confirm')!.click();
-    fixture.detectChanges();
-    const optInDialog = compiled.querySelector<HTMLDialogElement>('#history-opt-in-title')!.closest('dialog')!;
-    expect(create.historySetupBusy()).toBe(true);
-    expect(optInDialog.querySelector<HTMLButtonElement>('.generator-close')?.disabled).toBe(true);
-    const cancelSetup = new Event('cancel', { cancelable: true });
-    optInDialog.dispatchEvent(cancelSetup);
-    expect(cancelSetup.defaultPrevented).toBe(true);
-    expect(optInDialog.open).toBe(true);
-    await vi.waitFor(() => expect(TestBed.inject(SecretHistoryStore).unlocked()).toBe(true));
-    await fixture.whenStable();
-    await create.create(true);
-    fixture.detectChanges();
-
-    const stored = [...Array(localStorage.length)].map((_, index) => localStorage.getItem(localStorage.key(index)!) ?? '').join('\n');
-    expect(localStorage.getItem('privacylink.secret-history.v3')).toContain('"version":3');
-    expect(stored).not.toContain(create.shareLink());
-    expect(stored).not.toContain('History secret password');
-    expect(stored).not.toContain('test-revoke-token');
-  });
-
-  it('does not enable history when the passphrase confirmation does not match', async () => {
-    const fixture = await renderApp();
-    const create = TestBed.inject(CreateState);
-    create.message.set('Link remains available');
-    const compiled = fixture.nativeElement as HTMLElement;
-    compiled.querySelector<HTMLButtonElement>('.header-tools .history-nav-link')!.click();
-    const passphraseInput = compiled.querySelector<HTMLInputElement>('#history-passphrase')!;
-    const confirmationInput = compiled.querySelector<HTMLInputElement>('#history-passphrase-confirmation')!;
-    passphraseInput.value = 'violet lantern river meadow';
-    passphraseInput.dispatchEvent(new Event('input'));
-    confirmationInput.value = 'different violet river meadow';
-    confirmationInput.dispatchEvent(new Event('input'));
-    fixture.detectChanges();
-    compiled.querySelector<HTMLButtonElement>('.history-opt-in-confirm')!.click();
-    expect(TestBed.inject(SecretHistoryStore).enabled()).toBe(false);
-    await create.create();
-    fixture.detectChanges();
-
-    expect(TestBed.inject(AppState).mode()).toBe('result');
-    expect(localStorage.getItem('privacylink.secret-history.v1')).toBeNull();
-    expect(localStorage.getItem('privacylink.secret-history.v2')).toBeNull();
-    expect(localStorage.getItem('privacylink.secret-history.credential.v2')).toBeNull();
-    expect(localStorage.getItem('privacylink.secret-history.v3')).toBeNull();
-  });
-
-  it('lets the user cancel a create while history is locked or continue without saving', async () => {
-    const fixture = await renderApp();
-    const create = TestBed.inject(CreateState);
-    const history = TestBed.inject(SecretHistoryStore);
-    create.message.set('Keep this draft');
-    expect(await history.enable('violet lantern river meadow')).toBe(true);
-    history.unlocked.set(false);
 
     await create.create();
-    expect(create.historyLockedDialogOpen()).toBe(true);
-    expect(api.create).not.toHaveBeenCalled();
-    create.cancelLockedHistoryCreation();
-    expect(create.message()).toBe('Keep this draft');
-    expect(api.create).not.toHaveBeenCalled();
-
-    await create.create();
-    create.continueWithoutHistory();
-    await vi.waitFor(() => expect(api.create).toHaveBeenCalledOnce());
-    await fixture.whenStable();
     fixture.detectChanges();
 
-    expect(TestBed.inject(AppState).mode()).toBe('result');
-    expect(create.historyWarning()).toBe('notSaved');
-    expect(history.entries()).toEqual([]);
-  });
-
-  it('shows one header history control for disabled, locked and unlocked states', async () => {
-    const fixture = await renderApp();
-    const compiled = fixture.nativeElement as HTMLElement;
-    const store = TestBed.inject(SecretHistoryStore);
-    const headerControl = () => compiled.querySelector<HTMLElement>('.header-tools .history-nav-link')!;
-
-    expect(headerControl().textContent).toContain('Save links to history');
-    expect(compiled.querySelector('.compose-actions .history-opt-in-link')).toBeNull();
-    headerControl().click();
-    fixture.detectChanges();
-    const optInDialog = compiled.querySelector<HTMLDialogElement>('#history-opt-in-title')!.closest('dialog')!;
-    expect(optInDialog.open).toBe(true);
-    optInDialog.querySelector<HTMLButtonElement>('.generator-close')!.click();
-    fixture.detectChanges();
-    expect(optInDialog.open).toBe(false);
-
-    expect(await store.enable('violet lantern river meadow')).toBe(true);
-    store.unlocked.set(false);
-    fixture.detectChanges();
-    expect(headerControl().textContent).toContain('Unlock history');
-    expect(compiled.querySelector('.compose-actions .history-opt-in-link')).toBeNull();
-
-    store.unlocked.set(true);
-    fixture.detectChanges();
-    expect(compiled.querySelector<HTMLAnchorElement>('.header-tools .history-nav-link')?.textContent).toContain('History');
-    expect(compiled.querySelector('.compose-actions .history-opt-in-link')).toBeNull();
-    headerControl().click();
-    await fixture.whenStable();
-    fixture.detectChanges();
-    expect(TestBed.inject(Router).url).toBe('/history');
-  });
-
-  it('explains result-page history setup does not save the current link', async () => {
-    const fixture = await renderApp();
-    const create = TestBed.inject(CreateState);
-    const store = TestBed.inject(SecretHistoryStore);
-    const compiled = fixture.nativeElement as HTMLElement;
-    create.message.set('Current link is not retroactively saved');
-    await create.create();
-    fixture.detectChanges();
-
-    compiled.querySelector<HTMLButtonElement>('.header-tools .history-nav-link')!.click();
-    fixture.detectChanges();
-    expect(compiled.querySelector('#history-enable-future-only')?.textContent).toContain('This current link will not be added');
-    const passphraseInput = compiled.querySelector<HTMLInputElement>('#history-passphrase')!;
-    const confirmationInput = compiled.querySelector<HTMLInputElement>('#history-passphrase-confirmation')!;
-    passphraseInput.value = 'violet lantern river meadow';
-    passphraseInput.dispatchEvent(new Event('input'));
-    confirmationInput.value = 'violet lantern river meadow';
-    confirmationInput.dispatchEvent(new Event('input'));
-    fixture.detectChanges();
-    compiled.querySelector<HTMLButtonElement>('.history-opt-in-confirm')!.click();
-
-    await vi.waitFor(() => expect(store.unlocked()).toBe(true));
-    await fixture.whenStable();
-    fixture.detectChanges();
-    expect(store.entries()).toEqual([]);
-    expect(compiled.querySelector('.card .info[role="status"]')?.textContent).toContain('This link was not added');
-    expect(compiled.querySelector<HTMLAnchorElement>('.header-tools .history-nav-link')?.textContent).toContain('History');
-    expect(create.historyEnabledFromResult()).toBe(true);
-
-    compiled.querySelector<HTMLAnchorElement>('.header-tools .history-nav-link')!.click();
-    await fixture.whenStable();
-    fixture.detectChanges();
-    expect(TestBed.inject(AppState).mode()).toBe('history');
-    expect(create.historyEnabledFromResult()).toBe(false);
-
-    compiled.querySelector<HTMLAnchorElement>('.header-tools a')!.click();
-    await fixture.whenStable();
-    fixture.detectChanges();
-    expect(TestBed.inject(AppState).mode()).toBe('create');
-    expect(create.historyEnabledFromResult()).toBe(false);
-    create.message.set('A new link after history was enabled');
-    await create.create();
-    fixture.detectChanges();
     expect(TestBed.inject(AppState).mode()).toBe('result');
     expect(store.entries()).toHaveLength(1);
-    expect(compiled.querySelector('.card .info[role="status"]')).toBeNull();
+    expect(store.entries()[0]).toMatchObject({
+      link: create.shareLink(),
+      password: 'History secret password',
+      revokeToken: 'test-revoke-token'
+    });
+    expect(historyStorage.records.size).toBe(1);
+    const persisted = JSON.stringify([...historyStorage.records.values()].map(record => ({
+      id: record.id,
+      createdAt: record.createdAt,
+      expiresAt: record.expiresAt,
+      iv: Array.from(new Uint8Array(record.iv)),
+      ciphertext: Array.from(new Uint8Array(record.ciphertext))
+    })));
+    expect(persisted).not.toContain(create.shareLink());
+    expect(persisted).not.toContain('History secret password');
+    expect(persisted).not.toContain('test-revoke-token');
+
+    const key = historyStorage.metadata.get('encryptionKey') as CryptoKey;
+    expect(key.extractable).toBe(false);
+    expect(key.algorithm).toMatchObject({ name: 'AES-GCM', length: 256 });
+    await expect(crypto.subtle.exportKey('raw', key)).rejects.toThrow();
   });
 
-  it('opens the shared unlock dialog from the create header and stays on the create form after success', async () => {
-    const store = TestBed.inject(SecretHistoryStore);
-    expect(await store.enable('violet lantern river meadow')).toBe(true);
-    store.unlocked.set(false);
+  it('opens history automatically without an unlock prompt and lets the sender edit a label', async () => {
     const fixture = await renderApp();
-    const compiled = fixture.nativeElement as HTMLElement;
-    const trigger = compiled.querySelector<HTMLButtonElement>('.header-tools .history-nav-link')!;
+    const create = TestBed.inject(CreateState);
+    const store = TestBed.inject(SecretHistoryStore);
+    create.message.set('A link with a label');
+    await create.create();
 
-    expect(trigger.textContent).toContain('Unlock history');
-    trigger.click();
-    fixture.detectChanges();
-    const dialog = compiled.querySelector<HTMLDialogElement>('#unlock-history-dialog')!;
-    expect(dialog.open).toBe(true);
-    const passphrase = compiled.querySelector<HTMLInputElement>('#history-unlock-passphrase')!;
-    passphrase.value = 'violet lantern river meadow';
-    passphrase.dispatchEvent(new Event('input'));
-    fixture.detectChanges();
-    compiled.querySelector<HTMLButtonElement>('.history-unlock-confirm')!.click();
-
-    await vi.waitFor(() => expect(store.unlocked()).toBe(true));
+    await TestBed.inject(Router).navigateByUrl('/history');
     await fixture.whenStable();
     fixture.detectChanges();
-    expect(TestBed.inject(Router).url).toBe('/');
-    expect(TestBed.inject(AppState).mode()).toBe('create');
-    expect(compiled.querySelector('#message')).not.toBeNull();
-    expect(compiled.querySelector('.history-empty')).toBeNull();
-  });
-
-  it('keeps the locked History page passphrase-free and opens reset from the shared dialog', async () => {
-    const store = TestBed.inject(SecretHistoryStore);
-    expect(await store.enable('violet lantern river meadow')).toBe(true);
-    store.unlocked.set(false);
-    const fixture = await renderApp('/history');
     const compiled = fixture.nativeElement as HTMLElement;
 
-    expect(compiled.querySelector('.history-vault-notice input')).toBeNull();
-    const trigger = compiled.querySelector<HTMLButtonElement>('.history-vault-notice button.primary')!;
-    trigger.click();
+    expect(compiled.querySelector('.history-vault-actions')).toBeNull();
+    expect(compiled.textContent).not.toContain('Turn off and erase history');
+    expect(compiled.querySelector('#unlock-history-dialog')).toBeNull();
+    expect(compiled.querySelector('.history-table')).not.toBeNull();
+    compiled.querySelector<HTMLButtonElement>('.history-label-action')!.click();
     fixture.detectChanges();
-    const unlockDialog = compiled.querySelector<HTMLDialogElement>('#unlock-history-dialog')!;
-    expect(unlockDialog.open).toBe(true);
-    compiled.querySelector<HTMLButtonElement>('.history-reset-link button')!.click();
+    const label = compiled.querySelector<HTMLInputElement>('.history-label-editor input')!;
+    label.value = 'Finance handoff';
+    label.dispatchEvent(new Event('input', { bubbles: true }));
+    fixture.detectChanges();
+    expect(TestBed.inject(HistoryState).labelDraft()).toBe('Finance handoff');
+    compiled.querySelector<HTMLButtonElement>('.history-label-editor .secondary')!.click();
+    await vi.waitFor(() => expect(TestBed.inject(HistoryState).editingLabelId()).toBe(''));
     fixture.detectChanges();
 
-    const resetDialog = compiled.querySelector<HTMLDialogElement>('#reset-vault-title')!.closest('dialog')!;
-    expect(unlockDialog.open).toBe(false);
-    expect(resetDialog.open).toBe(true);
+    expect(store.entries()[0]?.givenLabel).toBe('Finance handoff');
+    const record = historyStorage.records.values().next().value!;
+    const encryptedText = JSON.stringify(Array.from(new Uint8Array(record.ciphertext)));
+    expect(encryptedText).not.toContain('Finance handoff');
+    expect(compiled.querySelector('.history-entry-label')?.textContent).toContain('Finance handoff');
   });
 
-  it('keeps the reset dialog open while deriving the replacement vault key', async () => {
+  it('preserves copy, open, share, local remove, and explicit revoke actions', async () => {
+    const fixture = await renderApp('/history');
     const store = TestBed.inject(SecretHistoryStore);
-    expect(await store.enable('violet lantern river meadow')).toBe(true);
+    const history = TestBed.inject(HistoryState);
+    const sharing = TestBed.inject(LinkSharingState);
+    const entry = {
+      id: 'BBBBBBBBBBBBBBBBBBBBBB',
+      createdAt: '2026-10-24T07:00:00.000Z',
+      link: 'https://example.test/s/secret#client-key',
+      expiresAt: '2030-01-01T00:00:00.000Z',
+      password: 'access-code',
+      revokeToken: 'revoke-token'
+    };
+    const copy = vi.spyOn(sharing, 'copy').mockResolvedValue(true);
+    const open = vi.spyOn(sharing, 'openInNewTab');
+    const share = vi.spyOn(sharing, 'share').mockResolvedValue();
+    await store.add(entry);
+
+    await history.copyHistoryValue(entry, 'link');
+    history.openHistoryLink(entry);
+    history.share(entry.link);
+    expect(copy).toHaveBeenCalledWith(entry.link);
+    expect(open).toHaveBeenCalledWith(entry.link);
+    expect(share).toHaveBeenCalledWith(entry.link);
+
+    history.requestHistoryAction(entry, 'forget');
+    history.confirmHistoryAction();
+    await vi.waitFor(() => expect(store.entries()).toHaveLength(0));
+    expect(api.revoke).not.toHaveBeenCalled();
+
+    await store.add(entry);
+    history.requestHistoryAction(entry, 'revoke');
+    history.confirmHistoryAction();
+    await vi.waitFor(() => expect(api.revoke).toHaveBeenCalledWith(entry.id, entry.revokeToken));
+    await vi.waitFor(() => expect(store.entries()).toHaveLength(0));
+  });
+
+  it('clears history and continues saving newly created links automatically', async () => {
+    const store = TestBed.inject(SecretHistoryStore);
+    await store.whenReady();
+    const initialKey = historyStorage.metadata.get('encryptionKey');
     await store.add({
-      id: 'AAAAAAAAAAAAAAAAAAAAAA',
+      id: 'CCCCCCCCCCCCCCCCCCCCCC',
       createdAt: '2026-10-24T07:00:00.000Z',
       link: 'https://example.test/s/secret#client-key',
       expiresAt: '2030-01-01T00:00:00.000Z',
       password: '',
-      revokeToken: 'test-token'
+      revokeToken: 'revoke-token'
     });
-    const fixture = await renderApp('/history');
-    const history = TestBed.inject(HistoryState);
-    history.requestResetVault();
-    fixture.detectChanges();
-    const compiled = fixture.nativeElement as HTMLElement;
-    const passphrase = compiled.querySelector<HTMLInputElement>('#reset-history-passphrase')!;
-    const confirmation = compiled.querySelector<HTMLInputElement>('#reset-history-passphrase-confirmation')!;
-    passphrase.value = 'different violet river meadow';
-    passphrase.dispatchEvent(new Event('input'));
-    confirmation.value = 'different violet river meadow';
-    confirmation.dispatchEvent(new Event('input'));
-    fixture.detectChanges();
 
-    const dialog = compiled.querySelector<HTMLDialogElement>('#reset-vault-title')!.closest('dialog')!;
-    compiled.querySelector<HTMLButtonElement>('#reset-vault-title ~ .history-passphrase-fields ~ .dialog-actions .primary')!.click();
-    fixture.detectChanges();
-    expect(history.vaultBusy()).toBe(true);
-    const cancel = new Event('cancel', { cancelable: true });
-    dialog.dispatchEvent(cancel);
-    expect(cancel.defaultPrevented).toBe(true);
-    expect(dialog.open).toBe(true);
-    expect(compiled.querySelector<HTMLButtonElement>('#reset-vault-title ~ .history-passphrase-fields ~ .dialog-actions .secondary')?.disabled).toBe(true);
+    expect(await store.clear()).toBe(true);
+    expect(historyStorage.metadata.get('encryptionKey')).toBe(initialKey);
+    expect(historyStorage.records.size).toBe(0);
 
-    await vi.waitFor(() => expect(history.resetVaultDialogOpen()).toBe(false));
-    expect(store.entries()).toEqual([]);
+    expect(await store.add({
+      id: 'DDDDDDDDDDDDDDDDDDDDDD',
+      createdAt: '2026-10-24T07:00:00.000Z',
+      link: 'https://example.test/s/secret#client-key',
+      expiresAt: '2030-01-01T00:00:00.000Z',
+      password: '',
+      revokeToken: 'revoke-token'
+    })).toBe(true);
+    expect(store.entries().map(item => item.id)).toEqual(['DDDDDDDDDDDDDDDDDDDDDD']);
   });
 
+  it('keeps a created link available and warns when browser history storage fails', async () => {
+    const fixture = await renderApp();
+    const create = TestBed.inject(CreateState);
+    await TestBed.inject(SecretHistoryStore).whenReady();
+    historyStorage.failWrites = true;
+    create.message.set('The link must remain available');
+    create.password.set('separate-access-code');
+
+    await create.create();
+    fixture.detectChanges();
+
+    expect(TestBed.inject(AppState).mode()).toBe('result');
+    expect(create.shareLink()).toContain('/s/AAAAAAAAAAAAAAAAAAAAAA#');
+    expect(create.resultAccessCode()).toBe('separate-access-code');
+    expect(fixture.nativeElement.textContent).toContain('Copy the link and access code now');
+  });
   it('creates successfully when the local wall clock is five minutes ahead of the challenge issuer', async () => {
     const actualNow = Date.now();
     const serverExpiresAt = Math.floor(actualNow / 1000) + 300;
@@ -1097,9 +984,9 @@ describe('App', () => {
     }
   });
 
-  it('keeps history cell labels available to the compact layout after unlocking the vault', async () => {
+  it('keeps history cell labels available to the compact layout', async () => {
     const history = TestBed.inject(SecretHistoryStore);
-    await history.enable('violet lantern river meadow');
+    await history.whenReady();
     await history.add({
       id: 'AAAAAAAAAAAAAAAAAAAAAA',
       createdAt: '2026-09-25T12:00:00.000Z',

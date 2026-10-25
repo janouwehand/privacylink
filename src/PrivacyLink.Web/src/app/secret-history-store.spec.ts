@@ -1,245 +1,305 @@
 import { createEnvironmentInjector, EnvironmentInjector } from '@angular/core';
-import { TestBed as AngularTestBed } from '@angular/core/testing';
+import { TestBed } from '@angular/core/testing';
 import { vi } from 'vitest';
-import { SECRET_HISTORY_STORAGE, SecretHistoryStorage, SecretHistoryStore } from './secret-history-store';
 import { installTestWebLocks } from '../../test-utils/web-locks';
+import { MemoryHistoryStorage } from '../../test-utils/memory-history-storage';
+import { SECRET_HISTORY_STORAGE, SecretHistoryStorage, SecretHistoryStore } from './secret-history-store';
 
-const LEGACY_KEY = 'privacylink.secret-history.v1';
-const OLD_CIPHERTEXT_KEY = 'privacylink.secret-history.v2';
-const OLD_CREDENTIAL_KEY = 'privacylink.secret-history.credential.v2';
-const CIPHERTEXT_KEY = 'privacylink.secret-history.v3';
-const PASSPHRASE = 'violet lantern river meadow';
-
-function entry() {
+function entry(id: string, label?: string) {
   return {
-    id: 'AAAAAAAAAAAAAAAAAAAAAA',
+    id,
     createdAt: '2026-10-24T07:00:00.000Z',
     link: 'https://example.test/s/secret#client-key-never-plaintext',
     expiresAt: '2030-01-01T00:00:00.000Z',
     password: 'private-password-never-plaintext',
-    revokeToken: 'private-revoke-token-never-plaintext'
+    revokeToken: 'private-revoke-token-never-plaintext',
+    ...(label ? { givenLabel: label } : {})
   };
 }
 
 describe('SecretHistoryStore', () => {
-  let values: Map<string, string>;
-  let storage: SecretHistoryStorage;
+  let storage: MemoryHistoryStorage;
   let restoreWebLocks: (() => void) | undefined;
   let childInjectors: EnvironmentInjector[] = [];
 
-  async function createStore(): Promise<SecretHistoryStore> {
-    AngularTestBed.resetTestingModule();
-    await AngularTestBed.configureTestingModule({
+  async function configure(): Promise<void> {
+    TestBed.resetTestingModule();
+    await TestBed.configureTestingModule({
       providers: [{ provide: SECRET_HISTORY_STORAGE, useValue: storage }]
     }).compileComponents();
-    return AngularTestBed.inject(SecretHistoryStore);
+  }
+
+  async function createStore(): Promise<SecretHistoryStore> {
+    await configure();
+    const store = TestBed.inject(SecretHistoryStore);
+    await store.whenReady();
+    return store;
   }
 
   async function createIndependentStores(count: number): Promise<SecretHistoryStore[]> {
-    AngularTestBed.resetTestingModule();
-    await AngularTestBed.configureTestingModule({
-      providers: [{ provide: SECRET_HISTORY_STORAGE, useValue: storage }]
-    }).compileComponents();
-    const parent = AngularTestBed.inject(EnvironmentInjector);
-    return Array.from({ length: count }, () => {
+    await configure();
+    const parent = TestBed.inject(EnvironmentInjector);
+    const stores = Array.from({ length: count }, () => {
       const injector = createEnvironmentInjector([SecretHistoryStore], parent);
       childInjectors.push(injector);
       return injector.get(SecretHistoryStore);
     });
-  }
-
-  function dispatchStorageEvent(): void {
-    window.dispatchEvent(new StorageEvent('storage', {
-      key: CIPHERTEXT_KEY,
-      newValue: values.get(CIPHERTEXT_KEY) ?? null
-    }));
+    await Promise.all(stores.map(store => store.whenReady()));
+    return stores;
   }
 
   beforeEach(() => {
     restoreWebLocks = installTestWebLocks();
-    values = new Map();
-    storage = {
-      getItem: key => values.get(key) ?? null,
-      setItem: (key, value) => { values.set(key, value); },
-      removeItem: key => { values.delete(key); }
-    };
+    storage = new MemoryHistoryStorage();
   });
 
   afterEach(() => {
     restoreWebLocks?.();
     for (const injector of childInjectors) injector.destroy();
     childInjectors = [];
-    AngularTestBed.resetTestingModule();
+    TestBed.resetTestingModule();
+    vi.restoreAllMocks();
   });
 
-  it('keeps sender history disabled and writes nothing by default', async () => {
+  it('enables automatic saving by default and creates a non-extractable AES-256 key', async () => {
     const store = await createStore();
-    expect(store.enabled()).toBe(false);
+    const key = storage.metadata.get('encryptionKey') as CryptoKey;
+
     expect(store.entries()).toEqual([]);
-    expect(values.size).toBe(0);
+    expect(key.extractable).toBe(false);
+    expect(key.algorithm).toMatchObject({ name: 'AES-GCM', length: 256 });
+    expect(key.usages).toEqual(['encrypt', 'decrypt']);
+    await expect(crypto.subtle.exportKey('raw', key)).rejects.toThrow();
   });
 
-  it('derives the vault key from the passphrase and restores only with the correct passphrase', async () => {
-    const store = await createStore();
-    expect(await store.enable(PASSPHRASE)).toBe(true);
-    expect(await store.add(entry())).toBe(true);
+  it('encrypts every secret-bearing field separately and reuses the persisted CryptoKey', async () => {
+    const first = await createStore();
+    const saved = entry('secret-one', 'Payroll');
+    expect(await first.add(saved)).toBe(true);
 
-    const persisted = [...values.values()].join('\n');
-    expect(persisted).not.toContain(PASSPHRASE);
-    expect(persisted).not.toContain('PrivacyLink sender history vault check v3');
-    expect(persisted).not.toContain(entry().link);
-    expect(persisted).not.toContain(entry().password);
-    expect(persisted).not.toContain(entry().revokeToken);
-    const envelope = JSON.parse(values.get(CIPHERTEXT_KEY)!);
-    expect(envelope.version).toBe(3);
-    expect(envelope.kdf).toMatchObject({ algorithm: 'argon2id', version: 19, memoryKiB: 19456, iterations: 2, parallelism: 1 });
-    expect(envelope.kdf.salt).toHaveLength(22);
+    const record = storage.records.get(saved.id)!;
+    expect(storage.records.size).toBe(1);
+    expect(record).toMatchObject({
+      id: saved.id,
+      version: 1,
+      createdAt: saved.createdAt,
+      expiresAt: saved.expiresAt
+    });
+    expect(Object.keys(record).sort()).toEqual(['ciphertext', 'createdAt', 'expiresAt', 'id', 'iv', 'version']);
+    const persisted = JSON.stringify({
+      id: record.id,
+      version: record.version,
+      createdAt: record.createdAt,
+      expiresAt: record.expiresAt,
+      iv: Array.from(new Uint8Array(record.iv)),
+      ciphertext: Array.from(new Uint8Array(record.ciphertext))
+    });
+    for (const secret of [saved.link, saved.password, saved.revokeToken!, saved.givenLabel!]) {
+      expect(persisted).not.toContain(secret);
+    }
+    expect(storage.metadata.get('encryptionKey')).toBeDefined();
+    expect(JSON.stringify([...storage.metadata.keys()])).not.toContain('passphrase');
+
+    const originalKey = storage.metadata.get('encryptionKey');
+    const restored = await createStore();
+    expect(storage.metadata.get('encryptionKey')).toBe(originalKey);
+    expect(restored.entries()).toEqual([saved]);
+  });
+
+  it('does not read, migrate, or delete any old history data', async () => {
+    localStorage.setItem('privacylink.secret-history.v1', 'old plaintext');
+    localStorage.setItem('privacylink.secret-history.v2', 'old ciphertext');
+    localStorage.setItem('privacylink.secret-history.v3', 'old vault');
+    localStorage.setItem('privacylink.secret-history.credential.v2', 'old credential');
+
+    const store = await createStore();
+
+    expect(store.entries()).toEqual([]);
+    expect(localStorage.getItem('privacylink.secret-history.v1')).toBe('old plaintext');
+    expect(localStorage.getItem('privacylink.secret-history.v2')).toBe('old ciphertext');
+    expect(localStorage.getItem('privacylink.secret-history.v3')).toBe('old vault');
+    expect(localStorage.getItem('privacylink.secret-history.credential.v2')).toBe('old credential');
+  });
+
+  it('isolates a tampered record while restoring other readable entries', async () => {
+    const store = await createStore();
+    await store.add(entry('good-secret'));
+    await store.add(entry('damaged-secret'));
+    const damaged = storage.records.get('damaged-secret')!;
+    const bytes = new Uint8Array(damaged.ciphertext.slice(0));
+    bytes[0] ^= 0xff;
+    storage.records.set('damaged-secret', { ...damaged, ciphertext: bytes.buffer });
 
     const restored = await createStore();
-    expect(await restored.unlock(PASSPHRASE)).toBe(true);
-    expect(restored.entries()).toEqual([entry()]);
 
-    const wrong = await createStore();
-    expect(await wrong.unlock('amber forest cloud bridge')).toBe(false);
-    expect(wrong.entries()).toEqual([]);
-    expect(wrong.error()).toBe('incorrect');
+    expect(restored.entries()).toEqual([entry('good-secret')]);
+    expect(restored.unavailableEntries()).toBe(1);
+    expect(restored.error()).toBe('unavailable');
+    expect(storage.records.has('damaged-secret')).toBe(true);
   });
 
-  it('uses the exact Unicode passphrase input without normalization', async () => {
-    const passphrase = 'caf\u00e9 Meadow \u{1F331} River';
+  it('keeps a tampered expired record unavailable instead of deleting it', async () => {
     const store = await createStore();
-    expect(await store.enable(passphrase)).toBe(true);
-    expect(await store.add(entry())).toBe(true);
+    await store.add(entry('tampered-expiry'));
+    const record = storage.records.get('tampered-expiry')!;
+    storage.records.set(record.id, { ...record, expiresAt: new Date(Date.now() - 1_000).toISOString() });
 
-    const decomposedInput = await createStore();
-    expect(decomposedInput).not.toBe(store);
-    expect(decomposedInput.unlocked()).toBe(false);
-    expect(await decomposedInput.unlock(passphrase.normalize('NFD'))).toBe(false);
     const restored = await createStore();
-    expect(await restored.unlock(passphrase)).toBe(true);
+
+    expect(restored.entries()).toEqual([]);
+    expect(restored.unavailableEntries()).toBe(1);
+    expect(restored.error()).toBe('unavailable');
+    expect(storage.records.has('tampered-expiry')).toBe(true);
   });
 
-  it('rejects modified ciphertext and does not reveal entries', async () => {
+  it('does not replace missing key material while records remain and allows deliberate erasure', async () => {
     const store = await createStore();
-    await store.enable(PASSPHRASE);
-    await store.add(entry());
-    const envelope = JSON.parse(values.get(CIPHERTEXT_KEY)!);
-    const original = envelope.entries[0].ciphertext as string;
-    envelope.entries[0].ciphertext = (original.startsWith('A') ? 'B' : 'A') + original.slice(1);
-    values.set(CIPHERTEXT_KEY, JSON.stringify(envelope));
+    await store.add(entry('secret-one'));
+    storage.metadata.delete('encryptionKey');
 
-    const tampered = await createStore();
-    expect(await tampered.unlock(PASSPHRASE)).toBe(false);
-    expect(tampered.entries()).toEqual([]);
-    expect(tampered.error()).toBe('incorrect');
+    const restored = await createStore();
+
+    expect(restored.entries()).toEqual([]);
+    expect(restored.unavailableEntries()).toBe(1);
+    expect(storage.metadata.has('encryptionKey')).toBe(false);
+    expect(await restored.add(entry('secret-two'))).toBe(false);
+    expect(storage.records.size).toBe(1);
+    expect(await restored.clear()).toBe(true);
+    expect(storage.records.size).toBe(0);
+    expect(storage.metadata.has('encryptionKey')).toBe(false);
   });
 
-  it('requires at least 12 characters before creating a vault', async () => {
+  it('cleans up expired records without changing server data', async () => {
     const store = await createStore();
-    expect(await store.enable('short word')).toBe(false);
-    expect(store.error()).toBe('tooShort');
-    expect(values.has(CIPHERTEXT_KEY)).toBe(false);
-  });
-
-  it('deletes old plaintext and passkey vault data without restoring it', async () => {
-    values.set(LEGACY_KEY, JSON.stringify([entry()]));
-    values.set(OLD_CIPHERTEXT_KEY, 'old passkey ciphertext');
-    values.set(OLD_CREDENTIAL_KEY, 'old passkey credential');
-    const store = await createStore();
-    expect(values.has(LEGACY_KEY)).toBe(false);
-    expect(values.has(OLD_CIPHERTEXT_KEY)).toBe(false);
-    expect(values.has(OLD_CREDENTIAL_KEY)).toBe(false);
-    expect(store.entries()).toEqual([]);
-    expect(store.enabled()).toBe(false);
-    expect(values.has(CIPHERTEXT_KEY)).toBe(false);
-  });
-
-  it('removes expired per-entry ciphertext while locked and keeps active entries recoverable', async () => {
     const now = Date.parse('2030-01-01T00:00:00.000Z');
-    const dateNow = vi.spyOn(Date, 'now').mockReturnValue(now);
+    const dateNow = vi.spyOn(Date, 'now').mockReturnValue(now - 10_000);
     try {
-      const store = await createStore();
-      await store.enable(PASSPHRASE);
-      const expired = { ...entry(), id: 'expired', expiresAt: new Date(now + 60_000).toISOString() };
-      const active = { ...entry(), id: 'active', expiresAt: new Date(now + 3_600_000).toISOString() };
-      await store.add(expired);
-      await store.add(active);
-      const originalRecords = JSON.parse(values.get(CIPHERTEXT_KEY)!).entries;
-      expect(originalRecords).toHaveLength(2);
-
-      dateNow.mockReturnValue(now + 120_000);
-      const locked = await createStore();
-      expect(locked.unlocked()).toBe(false);
-      const prunedEnvelope = JSON.parse(values.get(CIPHERTEXT_KEY)!);
-      expect(prunedEnvelope.entries).toHaveLength(1);
-      expect(prunedEnvelope.entries[0].expiresAt).toBe(active.expiresAt);
-      expect(await locked.unlock(PASSPHRASE)).toBe(true);
-      expect(locked.entries()).toEqual([active]);
+      await store.add({ ...entry('expired-secret'), expiresAt: new Date(now).toISOString() });
+      await store.add({ ...entry('active-secret'), expiresAt: new Date(now + 60_000).toISOString() });
+      dateNow.mockReturnValue(now + 1);
+      expect(await store.pruneExpired()).toBe(true);
+      expect(store.entries()).toEqual([{ ...entry('active-secret'), expiresAt: new Date(now + 60_000).toISOString() }]);
+      expect(storage.records.has('expired-secret')).toBe(false);
+      expect(storage.records.has('active-secret')).toBe(true);
     } finally {
       dateNow.mockRestore();
     }
   });
 
-  it('resets to an empty vault with a new passphrase and clears all previous history', async () => {
+  it('warns and retries when deleting an expired record temporarily fails', async () => {
     const store = await createStore();
-    await store.enable(PASSPHRASE);
-    await store.add(entry());
+    vi.useFakeTimers();
+    try {
+      storage.failNextDelete = true;
 
-    expect(await store.reset('different violet river meadow')).toBe(true);
-    expect(store.entries()).toEqual([]);
-    const locked = await createStore();
-    expect(await locked.unlock('different violet river meadow')).toBe(true);
-    expect(locked.entries()).toEqual([]);
-    const oldPassphrase = await createStore();
-    expect(await oldPassphrase.unlock(PASSPHRASE)).toBe(false);
-  });
+      expect(await store.add({ ...entry('expired-secret'), expiresAt: new Date(Date.now() - 1_000).toISOString() })).toBe(true);
+      expect(store.entries()).toEqual([]);
+      expect(store.expiryCleanupFailed()).toBe(true);
+      expect(storage.records.has('expired-secret')).toBe(true);
+      expect(storage.deleteCalls).toBe(1);
 
-  it('erases ciphertext and old credential metadata when history is disabled', async () => {
-    const store = await createStore();
-    await store.enable(PASSPHRASE);
-    await store.add(entry());
-    values.set(OLD_CREDENTIAL_KEY, 'obsolete');
-    expect(await store.disable()).toBe(true);
-    expect(store.enabled()).toBe(false);
-    expect(store.entries()).toEqual([]);
-    expect(values.has(CIPHERTEXT_KEY)).toBe(false);
-    expect(values.has(OLD_CREDENTIAL_KEY)).toBe(false);
-  });
+      await vi.advanceTimersByTimeAsync(60_000);
+      vi.useRealTimers();
 
-  it.each(['reset', 'disable'] as const)('rejects stale writes when another tab %s the vault', async action => {
-    const [staleWriter, otherTab, eventOnlyTab] = await createIndependentStores(3);
-    expect(await staleWriter.enable(PASSPHRASE)).toBe(true);
-    expect(await staleWriter.add(entry())).toBe(true);
-    dispatchStorageEvent();
-    expect(await otherTab.unlock(PASSPHRASE)).toBe(true);
-    expect(await eventOnlyTab.unlock(PASSPHRASE)).toBe(true);
-
-    if (action === 'reset') {
-      const oldSalt = JSON.parse(values.get(CIPHERTEXT_KEY)!).kdf.salt;
-      const replacementPassphrase = 'different violet river meadow';
-      expect(await otherTab.reset(replacementPassphrase)).toBe(true);
-      const replacement = values.get(CIPHERTEXT_KEY)!;
-      expect(JSON.parse(replacement).kdf.salt).not.toBe(oldSalt);
-
-      // The persisted identity check protects the gap before the browser dispatches `storage`.
-      expect(await staleWriter.add({ ...entry(), id: 'stale-after-reset' })).toBe(false);
-      expect(values.get(CIPHERTEXT_KEY)).toBe(replacement);
-
-      dispatchStorageEvent();
-      expect(eventOnlyTab.unlocked()).toBe(false);
-      expect(eventOnlyTab.entries()).toEqual([]);
-      expect(await eventOnlyTab.add({ ...entry(), id: 'stale-after-event' })).toBe(false);
-      expect(values.get(CIPHERTEXT_KEY)).toBe(replacement);
-      expect(await eventOnlyTab.unlock(replacementPassphrase)).toBe(true);
-      expect(eventOnlyTab.entries()).toEqual([]);
-    } else {
-      expect(await otherTab.disable()).toBe(true);
-      dispatchStorageEvent();
-      expect(staleWriter.enabled()).toBe(false);
-      expect(staleWriter.unlocked()).toBe(false);
-      expect(staleWriter.entries()).toEqual([]);
-      expect(await staleWriter.add({ ...entry(), id: 'stale-after-disable' })).toBe(false);
-      expect(values.has(CIPHERTEXT_KEY)).toBe(false);
+      await vi.waitFor(() => {
+        expect(storage.deleteCalls).toBe(2);
+        expect(storage.records.has('expired-secret')).toBe(false);
+        expect(store.expiryCleanupFailed()).toBe(false);
+      });
+    } finally {
+      vi.useRealTimers();
     }
+  });
+
+  it('clears records but keeps saving enabled and the local key', async () => {
+    const store = await createStore();
+    await store.add(entry('secret-one'));
+    const key = storage.metadata.get('encryptionKey');
+
+    expect(await store.clear()).toBe(true);
+    expect(store.entries()).toEqual([]);
+    expect(storage.records.size).toBe(0);
+    expect(storage.metadata.get('encryptionKey')).toBe(key);
+  });
+
+  it('preserves concurrent writes from independent store instances', async () => {
+    const [first, second] = await createIndependentStores(2);
+    await Promise.all([
+      first.add(entry('secret-one')),
+      second.add(entry('secret-two'))
+    ]);
+
+    const reloaded = await createStore();
+    expect(reloaded.entries()).toHaveLength(2);
+    expect(reloaded.entries().map(item => item.id).sort()).toEqual(['secret-one', 'secret-two']);
+    expect(storage.records.size).toBe(2);
+  });
+
+  it('rejects a paused add racing clear when Web Locks are unavailable', async () => {
+    const [addingTab, clearingTab] = await createIndependentStores(2);
+    const lockDescriptor = Object.getOwnPropertyDescriptor(navigator, 'locks');
+    Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined });
+    try {
+      const pause = storage.pauseNextAdd();
+      const pendingAdd = addingTab.add(entry('racing-clear'));
+      await pause.started;
+
+      expect(await clearingTab.clear()).toBe(true);
+      pause.release();
+      expect(await pendingAdd).toBe(false);
+      expect(storage.records.size).toBe(0);
+    } finally {
+      if (lockDescriptor) Object.defineProperty(navigator, 'locks', lockDescriptor);
+      else Reflect.deleteProperty(navigator, 'locks');
+    }
+  });
+
+  it('does not let an out-of-order refresh repopulate entries after clear', async () => {
+    const store = await createStore();
+    await store.add(entry('stale-refresh'));
+    const pause = storage.pauseNextEntriesRead();
+    const pendingRefresh = (store as unknown as { refresh(): Promise<void> }).refresh();
+    await pause.started;
+
+    expect(await store.clear()).toBe(true);
+    pause.release();
+    await pendingRefresh;
+
+    expect(store.entries()).toEqual([]);
+    expect(storage.records.size).toBe(0);
+  });
+
+  it('does not publish a stale snapshot when another tab clears during refresh', async () => {
+    const broadcastDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'BroadcastChannel');
+    Object.defineProperty(globalThis, 'BroadcastChannel', { configurable: true, value: undefined });
+    try {
+      const [refreshingTab, clearingTab] = await createIndependentStores(2);
+      await clearingTab.add(entry('cross-tab-stale-refresh'));
+      expect(refreshingTab.entries()).toEqual([]);
+
+      const pause = storage.pauseNextEntriesRead();
+      const pendingRefresh = (refreshingTab as unknown as { refresh(): Promise<void> }).refresh();
+      await pause.started;
+
+      expect(await clearingTab.clear()).toBe(true);
+      pause.release();
+      await pendingRefresh;
+
+      expect(refreshingTab.entries()).toEqual([]);
+      expect(storage.records.size).toBe(0);
+    } finally {
+      if (broadcastDescriptor) Object.defineProperty(globalThis, 'BroadcastChannel', broadcastDescriptor);
+      else Reflect.deleteProperty(globalThis, 'BroadcastChannel');
+    }
+  });
+
+  it('reports persistence failures without exposing an entry as saved', async () => {
+    const store = await createStore();
+    storage.failWrites = true;
+
+    expect(await store.add(entry('secret-one'))).toBe(false);
+    expect(store.entries()).toEqual([]);
+    expect(store.saveFailed()).toBe(true);
+    expect(storage.records.size).toBe(0);
   });
 });
