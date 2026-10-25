@@ -8,6 +8,7 @@ import { AppState } from './app-state';
 import { CreateState } from './create/create-state';
 import { HistoryState } from './history/history-state';
 import { LanguageState } from './language-state';
+import { LinkSharingState } from './link-sharing-state';
 import { RecipientState } from './recipient/recipient-state';
 import { RecipientPage } from './recipient/recipient-page';
 import { SecretApi, SecretApiError } from './secret-api';
@@ -359,7 +360,7 @@ describe('App', () => {
     passwordRecipient.unlockPassword.set('wrong password');
     await passwordRecipient.open();
     passwordFixture.detectChanges();
-    expect((passwordFixture.nativeElement as HTMLElement).textContent).toContain('That did not work. Check the PIN or password');
+    expect((passwordFixture.nativeElement as HTMLElement).textContent).toContain('That did not work. Check the access code');
     expect((passwordFixture.nativeElement as HTMLElement).textContent).not.toContain('This link is unavailable.');
 
     passwordFixture.destroy();
@@ -410,7 +411,7 @@ describe('App', () => {
       exists: true,
       protocolVersion: 1,
       expiresAt: '2030-01-01T00:00:00.000Z',
-      passwordProtected: false,
+      passwordProtected: true,
       hasMessage: true,
       fileCount: 0,
       files: [],
@@ -420,6 +421,8 @@ describe('App', () => {
     const fixture = await renderApp(`/s/${id}#${'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'}`);
 
     const compiled = fixture.nativeElement as HTMLElement;
+    expect(compiled.textContent).toContain('To open this content, the recipient first verifies the email address and then enters the access code.');
+    expect(compiled.querySelector('#unlock-password')).toBeNull();
     expect(compiled.textContent).toContain('r***@example.com');
     expect(compiled.textContent).toContain('This also applies when you open the link in another browser.');
     const requestButton = compiled.querySelector<HTMLButtonElement>('[data-testid="request-email-code"]');
@@ -450,6 +453,7 @@ describe('App', () => {
     await fixture.whenStable();
     fixture.detectChanges();
     expect(compiled.querySelector('.card > .primary')?.textContent).toContain('Open content');
+    expect(compiled.querySelector('#unlock-password')).not.toBeNull();
     expect(api.openRaw).not.toHaveBeenCalled();
     expect(localStorage.getItem(`privacylink.email-verification.${id}`)).toBeTruthy();
   });
@@ -613,6 +617,187 @@ describe('App', () => {
     expect(localStorage.getItem('privacylink.secret-history.v3')).toBeNull();
   });
 
+  it('configures optional security separately and shows the access code on the result page', async () => {
+    const fixture = await renderApp();
+    const compiled = fixture.nativeElement as HTMLElement;
+    const create = TestBed.inject(CreateState);
+    const sharing = TestBed.inject(LinkSharingState);
+    const copySpy = vi.spyOn(sharing, 'copy').mockResolvedValue(true);
+    const shareSpy = vi.spyOn(sharing, 'share').mockResolvedValue();
+    const accessCode = 'separate-channel-code';
+    const securityDisclosure = compiled.querySelector<HTMLDetailsElement>('[data-testid="security-disclosure"]')!;
+
+    expect(securityDisclosure.open).toBe(false);
+    expect(compiled.querySelector('.security-disclosure-status')?.textContent).toContain('Not configured');
+    expect(compiled.querySelector('#expiry')).not.toBeNull();
+    expect(compiled.querySelector('#access-code-input')?.closest('dialog')?.open).toBe(false);
+    expect(compiled.querySelector('#password-copy-title')).toBeNull();
+
+    securityDisclosure.open = true;
+    fixture.detectChanges();
+    compiled.querySelector<HTMLButtonElement>('[data-testid="access-code-action"]')!.click();
+    fixture.detectChanges();
+    let accessCodeDialog = compiled.querySelector<HTMLDialogElement>('#access-code-title')!.closest('dialog')!;
+    let accessCodeInput = compiled.querySelector<HTMLInputElement>('[data-testid="access-code-input"]')!;
+    expect(document.activeElement).toBe(accessCodeInput);
+    accessCodeInput.value = 'discarded-draft';
+    accessCodeInput.dispatchEvent(new Event('input', { bubbles: true }));
+    fixture.detectChanges();
+    accessCodeDialog.querySelector<HTMLButtonElement>('.dialog-actions .secondary')!.click();
+    fixture.detectChanges();
+    expect(create.password()).toBe('');
+
+    compiled.querySelector<HTMLButtonElement>('[data-testid="access-code-action"]')!.click();
+    fixture.detectChanges();
+    accessCodeDialog = compiled.querySelector<HTMLDialogElement>('#access-code-title')!.closest('dialog')!;
+    accessCodeInput = compiled.querySelector<HTMLInputElement>('[data-testid="access-code-input"]')!;
+    const generateAccessCodeButton = accessCodeDialog.querySelector<HTMLButtonElement>('[data-testid="generate-access-code"]')!;
+    expect(generateAccessCodeButton.textContent).toContain('Generate access code');
+    generateAccessCodeButton.click();
+    fixture.detectChanges();
+    const generatorDialog = compiled.querySelector<HTMLDialogElement>('.password-generator-dialog')!;
+    expect(generatorDialog.open).toBe(true);
+    const generatedCode = generatorDialog.querySelector<HTMLOutputElement>('.generator-value')!.textContent!.trim();
+    generatorDialog.querySelector<HTMLButtonElement>('[aria-label="Copy access code"]')!.click();
+    await fixture.whenStable();
+    expect(copySpy).toHaveBeenCalledWith(generatedCode);
+    generatorDialog.querySelector<HTMLButtonElement>('.generator-actions .primary')!.click();
+    fixture.detectChanges();
+    expect(compiled.querySelector<HTMLInputElement>('[data-testid="access-code-input"]')!.value).toBe(generatedCode);
+    expect(accessCodeInput.type).toBe('text');
+    expect(accessCodeInput.autocomplete).toBe('off');
+    expect(accessCodeDialog.querySelector('[aria-label="Show access code"]')).toBeNull();
+    expect(create.password()).toBe('');
+    accessCodeInput.value = accessCode;
+    accessCodeInput.dispatchEvent(new Event('input', { bubbles: true }));
+    fixture.detectChanges();
+    expect(accessCodeInput.value).toBe(accessCode);
+    accessCodeDialog.querySelector<HTMLButtonElement>('.dialog-actions .primary')!.click();
+    fixture.detectChanges();
+    expect(create.password()).toBe(accessCode);
+    expect(compiled.querySelector('.security-option-summary')?.textContent).toContain('Access code set');
+    expect(compiled.querySelector('.security-disclosure-status')?.textContent).toContain('Access code set');
+    const accessCodeAction = compiled.querySelector<HTMLButtonElement>('[data-testid="access-code-action"]')!;
+    expect(accessCodeAction.textContent).toContain('Remove');
+    expect(accessCodeAction.getAttribute('aria-label')).toBe('Remove access code');
+
+    accessCodeAction.click();
+    fixture.detectChanges();
+    expect(create.password()).toBe('');
+    expect(compiled.querySelector('[data-testid="access-code-action"]')?.textContent).toContain('Set access code');
+    compiled.querySelector<HTMLButtonElement>('[data-testid="access-code-action"]')!.click();
+    fixture.detectChanges();
+    accessCodeInput = compiled.querySelector<HTMLInputElement>('[data-testid="access-code-input"]')!;
+    accessCodeInput.value = 'unsaved-change';
+    accessCodeInput.dispatchEvent(new Event('input', { bubbles: true }));
+    fixture.detectChanges();
+    accessCodeDialog.querySelector<HTMLButtonElement>('.dialog-actions .secondary')!.click();
+    fixture.detectChanges();
+    expect(create.password()).toBe('');
+    compiled.querySelector<HTMLButtonElement>('[data-testid="access-code-action"]')!.click();
+    fixture.detectChanges();
+    accessCodeInput = compiled.querySelector<HTMLInputElement>('[data-testid="access-code-input"]')!;
+    accessCodeInput.value = accessCode;
+    accessCodeInput.dispatchEvent(new Event('input', { bubbles: true }));
+    fixture.detectChanges();
+    accessCodeDialog.querySelector<HTMLButtonElement>('.dialog-actions .primary')!.click();
+    fixture.detectChanges();
+    expect(create.password()).toBe(accessCode);
+
+    compiled.querySelector<HTMLButtonElement>('[data-testid="email-verification-action"]')!.click();
+    fixture.detectChanges();
+    const emailDialog = compiled.querySelector<HTMLDialogElement>('#email-verification-title')!.closest('dialog')!;
+    let email = compiled.querySelector<HTMLInputElement>('#recipient-email')!;
+    email.value = 'recipient@example.com';
+    email.dispatchEvent(new Event('input', { bubbles: true }));
+    fixture.detectChanges();
+    emailDialog.querySelector<HTMLButtonElement>('.dialog-actions .secondary')!.click();
+    fixture.detectChanges();
+    expect(create.emailVerificationEnabled()).toBe(false);
+
+    compiled.querySelector<HTMLButtonElement>('[data-testid="email-verification-action"]')!.click();
+    fixture.detectChanges();
+    email = compiled.querySelector<HTMLInputElement>('#recipient-email')!;
+    email.value = 'recipient@example.com';
+    email.dispatchEvent(new Event('input', { bubbles: true }));
+    fixture.detectChanges();
+    compiled.querySelector<HTMLFormElement>('.email-verification-form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    fixture.detectChanges();
+    expect(create.emailVerificationEnabled()).toBe(true);
+    const emailVerificationAction = compiled.querySelector<HTMLButtonElement>('[data-testid="email-verification-action"]')!;
+    expect(emailVerificationAction.textContent).toContain('Remove');
+    expect(emailVerificationAction.getAttribute('aria-label')).toBe('Remove email verification');
+    emailVerificationAction.click();
+    fixture.detectChanges();
+    expect(create.emailVerificationEnabled()).toBe(false);
+    expect(compiled.querySelector('[data-testid="email-verification-action"]')?.textContent).toContain('Set up email verification');
+    compiled.querySelector<HTMLButtonElement>('[data-testid="email-verification-action"]')!.click();
+    fixture.detectChanges();
+    email = compiled.querySelector<HTMLInputElement>('#recipient-email')!;
+    email.value = 'recipient@example.com';
+    email.dispatchEvent(new Event('input', { bubbles: true }));
+    fixture.detectChanges();
+    compiled.querySelector<HTMLFormElement>('.email-verification-form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    fixture.detectChanges();
+    expect(create.emailVerificationEnabled()).toBe(true);
+
+    const message = compiled.querySelector<HTMLTextAreaElement>('#message')!;
+    message.value = 'Protected content';
+    message.dispatchEvent(new Event('input', { bubbles: true }));
+    fixture.detectChanges();
+    compiled.querySelector<HTMLButtonElement>('.compose-actions .primary')!.click();
+    await vi.waitFor(() => expect(api.create).toHaveBeenCalledOnce());
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const request = api.create.mock.calls[0]?.[0];
+    expect(request).toEqual(expect.objectContaining({ emailAddress: 'recipient@example.com', password: expect.any(String) }));
+    expect(create.password()).toBe('');
+    expect(create.resultAccessCode()).toBe(accessCode);
+    expect(compiled.querySelector<HTMLInputElement>('#result-access-code')?.value).toBe(accessCode);
+    expect(compiled.querySelector('#expiry')).toBeNull();
+    expect(compiled.textContent).toContain('Expires on');
+    expect(create.shareLink()).not.toContain(accessCode);
+
+    create.share();
+    expect(shareSpy).toHaveBeenCalledWith(create.shareLink());
+    compiled.querySelector<HTMLButtonElement>('[data-testid="copy-result-access-code"]')!.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(copySpy).toHaveBeenCalledWith(accessCode);
+    const copyAccessCodeButton = compiled.querySelector<HTMLButtonElement>('[data-testid="copy-result-access-code"]');
+    expect(copyAccessCodeButton?.getAttribute('aria-label')).toBe('Copy access code');
+    expect(copyAccessCodeButton?.textContent?.trim()).toBe('');
+    expect(copyAccessCodeButton?.classList.contains('is-copied')).toBe(true);
+    expect(compiled.querySelector('[data-testid="copy-access-code-status"]')?.textContent?.trim()).toBe('Access code copied');
+
+    compiled.querySelector<HTMLButtonElement>('[data-testid="copy-result-link"]')!.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(copySpy).toHaveBeenCalledWith(create.shareLink());
+    const copyLinkButton = compiled.querySelector<HTMLButtonElement>('[data-testid="copy-result-link"]');
+    expect(copyLinkButton?.getAttribute('aria-label')).toBe('Copy link');
+    expect(copyLinkButton?.classList.contains('is-copied')).toBe(true);
+    expect(compiled.querySelector('[data-testid="copy-link-status"]')?.textContent?.trim()).toBe('Link copied');
+
+    await TestBed.inject(Router).navigateByUrl('/security');
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(create.resultAccessCode()).toBe('');
+    expect(compiled.querySelector('#result-access-code')).toBeNull();
+
+    await TestBed.inject(Router).navigateByUrl('/');
+    await fixture.whenStable();
+    create.password.set('next-secret-code');
+    create.message.set('Another secret');
+    await create.create();
+    fixture.detectChanges();
+    expect(create.resultAccessCode()).toBe('next-secret-code');
+    compiled.querySelector<HTMLButtonElement>('.result-create-another')!.click();
+    fixture.detectChanges();
+    expect(create.resultAccessCode()).toBe('');
+  });
+
   it('stores no sender history unless the user opts in', async () => {
     const fixture = await renderApp();
     const create = TestBed.inject(CreateState);
@@ -771,7 +956,7 @@ describe('App', () => {
     await fixture.whenStable();
     fixture.detectChanges();
     expect(store.entries()).toEqual([]);
-    expect(compiled.querySelector('.card [role="status"]')?.textContent).toContain('This link was not added');
+    expect(compiled.querySelector('.card .info[role="status"]')?.textContent).toContain('This link was not added');
     expect(compiled.querySelector<HTMLAnchorElement>('.header-tools .history-nav-link')?.textContent).toContain('History');
     expect(create.historyEnabledFromResult()).toBe(true);
 
@@ -791,7 +976,7 @@ describe('App', () => {
     fixture.detectChanges();
     expect(TestBed.inject(AppState).mode()).toBe('result');
     expect(store.entries()).toHaveLength(1);
-    expect(compiled.querySelector('.card [role="status"]')).toBeNull();
+    expect(compiled.querySelector('.card .info[role="status"]')).toBeNull();
   });
 
   it('opens the shared unlock dialog from the create header and stays on the create form after success', async () => {
@@ -926,6 +1111,6 @@ describe('App', () => {
     const fixture = await renderApp('/history');
     const cells = Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLTableCellElement>('.history-table tbody tr td'));
 
-    expect(cells.slice(0, 4).map(cell => cell.dataset['label'])).toEqual(['Created', 'Secure link', 'Expires on', 'PIN / password']);
+    expect(cells.slice(0, 4).map(cell => cell.dataset['label'])).toEqual(['Created', 'Secure link', 'Expires on', 'Access code']);
   });
 });
