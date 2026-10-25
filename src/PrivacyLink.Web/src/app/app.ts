@@ -23,7 +23,6 @@ export class App implements AfterViewInit {
   @ViewChild('emptyMessageDialog') private emptyMessageDialog?: ElementRef<HTMLDialogElement>;
   @ViewChild('historyActionDialog') private historyActionDialog?: ElementRef<HTMLDialogElement>;
   @ViewChild('clearHistoryDialog') private clearHistoryDialog?: ElementRef<HTMLDialogElement>;
-  @ViewChild('disableHistoryDialog') private disableHistoryDialog?: ElementRef<HTMLDialogElement>;
   @ViewChild('passwordGeneratorDialog') private passwordGeneratorDialog?: ElementRef<HTMLDialogElement>;
   @ViewChild('workProgressDialog') private workProgressDialog?: ElementRef<HTMLDialogElement>;
 
@@ -31,7 +30,6 @@ export class App implements AfterViewInit {
     effect(() => this.syncDialog(this.emptyMessageDialog?.nativeElement, this.create.emptyMessageDialogOpen()));
     effect(() => this.syncDialog(this.historyActionDialog?.nativeElement, this.history.historyActionDialogOpen()));
     effect(() => this.syncDialog(this.clearHistoryDialog?.nativeElement, this.history.clearHistoryDialogOpen()));
-    effect(() => this.syncDialog(this.disableHistoryDialog?.nativeElement, this.history.disableHistoryDialogOpen()));
     effect(() => this.syncDialog(this.passwordGeneratorDialog?.nativeElement, this.create.passwordGeneratorOpen()));
     effect(() => this.syncDialog(this.workProgressDialog?.nativeElement, this.workProgress.visible()));
   }
@@ -40,7 +38,6 @@ export class App implements AfterViewInit {
     this.syncDialog(this.emptyMessageDialog?.nativeElement, this.create.emptyMessageDialogOpen());
     this.syncDialog(this.historyActionDialog?.nativeElement, this.history.historyActionDialogOpen());
     this.syncDialog(this.clearHistoryDialog?.nativeElement, this.history.clearHistoryDialogOpen());
-    this.syncDialog(this.disableHistoryDialog?.nativeElement, this.history.disableHistoryDialogOpen());
     this.syncDialog(this.passwordGeneratorDialog?.nativeElement, this.create.passwordGeneratorOpen());
     this.syncDialog(this.workProgressDialog?.nativeElement, this.workProgress.visible());
   }

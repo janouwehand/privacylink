@@ -5,15 +5,9 @@
   @if (history.storeUnavailable()) { <p class="error" role="alert">{{ language.t('historyUnavailable', { count: history.storeUnavailable() }) }}</p> }
   @if (history.historyCopyFailed()) { <p class="error" role="alert">{{ language.t('clipboardFailure') }}</p> }
   @if (history.historyRevokeFailed()) { <p class="error" role="alert">{{ language.t('historyRevokeFailed') }}</p> }
-  @if (!history.historyEnabled()) {
-    <div class="history-vault-notice">
-      <p>{{ language.t('historyDisabledDescription') }}</p>
-      <button class="primary" type="button" (click)="history.enableHistory()" [disabled]="history.vaultBusy()">{{ language.t('historyEnable') }}</button>
-    </div>
+  @if (history.secretHistory().length === 0) {
+    <div class="history-empty"><strong>{{ language.t('historyEmpty') }}</strong><span>{{ language.t('historyEmptyDescription') }}</span><a class="primary history-empty-action" routerLink="/">{{ language.t('historyCreateLink') }}</a></div>
   } @else {
-    @if (history.secretHistory().length === 0) {
-      <div class="history-empty"><strong>{{ language.t('historyEmpty') }}</strong><span>{{ language.t('historyEmptyDescription') }}</span><a class="primary history-empty-action" routerLink="/">{{ language.t('historyCreateLink') }}</a></div>
-    } @else {
     <div class="history-table-wrap"><table class="history-table"><thead><tr><th>{{ language.t('created') }}</th><th>{{ language.t('secureLink') }}</th><th>{{ language.t('expires') }}</th><th>{{ language.t('passwordColumn') }}</th><th><span class="visually-hidden">{{ language.t('actions') }}</span></th></tr></thead><tbody>
       @for (entry of history.secretHistory(); track entry.id) {
         <tr>
@@ -38,10 +32,8 @@
         </tr>
       }
     </tbody></table></div>
-    }
-    @if (history.secretHistory().length > 0 || history.storeUnavailable() > 0) {
-      <div class="history-clear-actions"><button class="primary" type="button" [disabled]="!!history.historyRevokingId()" (click)="history.openClearHistoryDialog()">{{ language.t('clearHistory') }}</button></div>
-    }
-    <div class="history-vault-actions"><button class="text-button" type="button" (click)="history.requestDisableHistory()" [disabled]="history.vaultBusy()">{{ language.t('historyDisable') }}</button></div>
+  }
+  @if (history.secretHistory().length > 0 || history.storeUnavailable() > 0) {
+    <div class="history-clear-actions"><button class="primary" type="button" [disabled]="!!history.historyRevokingId()" (click)="history.openClearHistoryDialog()">{{ language.t('clearHistory') }}</button></div>
   }
 </section>

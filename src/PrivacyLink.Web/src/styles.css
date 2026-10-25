@@ -281,17 +281,6 @@ h2 { font-size: 18px; margin: 0 0 26px; }
 .password-copy-dialog p { margin: 0; color: #555; font-size: 14px; line-height: 1.6; }
 .history-page-card { width: 100%; }
 .history-privacy-note { margin: 14px 0 22px !important; padding: 11px 13px; border: 1px solid #d9d2b5; background: #fbf8ec; color: #625a3d !important; font-size: 12px !important; }
-.history-vault-notice { margin-top: 20px; padding: 16px; border: 1px solid #d7dfdc; background: #f7faf9; }
-.history-vault-notice p { max-width: 760px; margin: 10px 0 14px; color: #555; font-size: 13px; line-height: 1.6; }
-.history-passphrase-fields { display: grid; gap: 8px; margin: 18px 0 0; }
-.history-passphrase-fields label, .history-vault-notice label { color: #263b36; font-size: 13px; font-weight: 700; }
-.history-passphrase-fields input, .history-vault-notice input { display: block; width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid #bdcbc6; border-radius: 0; background: #fff; color: #151515; font: inherit; outline: none; }
-.history-passphrase-fields input:focus, .history-vault-notice input:focus { border-color: #287c70; box-shadow: 0 0 0 3px rgba(74, 155, 141, .2); }
-.history-passphrase-fields .field-note { margin: 0 0 8px; }
-.history-passphrase-fields .error { margin: 0; }
-.history-reset-link { margin: 16px 0 0; }
-.history-reset-link .subtle-link { min-height: 0; font-size: 12px; }
-.history-vault-actions { display: flex; align-items: center; justify-content: flex-end; gap: 14px; margin-top: 20px; padding-top: 16px; border-top: 1px solid #e5e5e5; }
 .history-empty { display: grid; gap: 6px; padding: 36px 18px; border: 1px dashed #aaa; color: #555; text-align: center; }
 .history-empty strong { color: #151515; font-size: 15px; }
 .history-empty-action { display: inline-flex; justify-self: center; margin-top: 12px; text-decoration: none; }

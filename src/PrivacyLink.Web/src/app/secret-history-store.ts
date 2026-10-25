@@ -20,19 +20,15 @@ export type EncryptedHistoryRecord = {
 };
 
 export interface SecretHistoryStorage {
-  getPreference(): Promise<boolean | undefined>;
-  setPreference(enabled: boolean): Promise<void>;
   getKey(): Promise<CryptoKey | undefined>;
   getKeyId(): Promise<string | undefined>;
   getEpoch(): Promise<number>;
   putKeyIfAbsent(candidate: CryptoKey, candidateId: string): Promise<boolean>;
-  enableWithKey(candidate: CryptoKey, candidateId: string): Promise<boolean>;
   getEntries(): Promise<EncryptedHistoryRecord[]>;
   addEntryIfCurrent(entry: EncryptedHistoryRecord, keyId: string, epoch: number): Promise<boolean>;
   replaceEntryIfCurrent(entry: EncryptedHistoryRecord, expectedCiphertext: ArrayBuffer, keyId: string, epoch: number): Promise<boolean>;
   deleteEntryIfCurrent(id: string, expectedCiphertext: ArrayBuffer): Promise<boolean>;
   clearEntries(): Promise<number>;
-  disable(): Promise<number>;
 }
 
 export const SECRET_HISTORY_STORAGE = new InjectionToken<SecretHistoryStorage>('SECRET_HISTORY_STORAGE', {
@@ -44,7 +40,6 @@ const DATABASE_NAME = 'privacylink.sender-history.v1';
 const DATABASE_VERSION = 1;
 const ENTRIES_STORE = 'entries';
 const METADATA_STORE = 'metadata';
-const SAVING_PREFERENCE = 'savingEnabled';
 const ENCRYPTION_KEY = 'encryptionKey';
 const ENCRYPTION_KEY_ID = 'encryptionKeyId';
 const HISTORY_EPOCH = 'historyEpoch';
@@ -54,15 +49,6 @@ export type HistoryVaultError = 'storage' | 'unavailable';
 
 class IndexedDbSecretHistoryStorage implements SecretHistoryStorage {
   private database?: Promise<IDBDatabase>;
-
-  async getPreference(): Promise<boolean | undefined> {
-    const value = await this.getMetadata(SAVING_PREFERENCE);
-    return typeof value === 'boolean' ? value : undefined;
-  }
-
-  async setPreference(enabled: boolean): Promise<void> {
-    await this.putMetadata(SAVING_PREFERENCE, enabled);
-  }
 
   async getKey(): Promise<CryptoKey | undefined> {
     const value = await this.getMetadata(ENCRYPTION_KEY);
@@ -85,64 +71,26 @@ class IndexedDbSecretHistoryStorage implements SecretHistoryStorage {
       const transaction = database.transaction([ENTRIES_STORE, METADATA_STORE], 'readwrite');
       const metadata = transaction.objectStore(METADATA_STORE);
       const entries = transaction.objectStore(ENTRIES_STORE);
-      let preference: unknown;
       let key: unknown;
       let keyId: unknown;
       let recordCount: number | undefined;
       let result = false;
       let failed = false;
       const finish = () => {
-        if (preference === false) return;
         if (isUsableKey(key) && typeof keyId === 'string') { result = true; return; }
         if (recordCount !== 0) { failed = true; transaction.abort(); return; }
         metadata.put(candidate, ENCRYPTION_KEY);
         metadata.put(candidateId, ENCRYPTION_KEY_ID);
         result = true;
       };
-      let remaining = 4;
+      let remaining = 3;
       const done = () => { if (--remaining === 0) finish(); };
-      metadata.get(SAVING_PREFERENCE).onsuccess = event => { preference = (event.target as IDBRequest).result; done(); };
       metadata.get(ENCRYPTION_KEY).onsuccess = event => { key = (event.target as IDBRequest).result; done(); };
       metadata.get(ENCRYPTION_KEY_ID).onsuccess = event => { keyId = (event.target as IDBRequest).result; done(); };
       entries.count().onsuccess = event => { recordCount = (event.target as IDBRequest<number>).result; done(); };
       transaction.oncomplete = () => resolve(result);
       transaction.onerror = () => reject(transaction.error ?? new Error('History key transaction failed'));
       transaction.onabort = () => failed ? resolve(false) : reject(transaction.error ?? new Error('History key transaction aborted'));
-    });
-  }
-
-  async enableWithKey(candidate: CryptoKey, candidateId: string): Promise<boolean> {
-    const database = await this.openDatabase();
-    return new Promise((resolve, reject) => {
-      const transaction = database.transaction([ENTRIES_STORE, METADATA_STORE], 'readwrite');
-      const metadata = transaction.objectStore(METADATA_STORE);
-      let key: unknown;
-      let keyId: unknown;
-      let recordCount: number | undefined;
-      let result = false;
-      let failed = false;
-      let remaining = 3;
-      const finish = () => {
-        if (isUsableKey(key) && typeof keyId === 'string') {
-          metadata.put(true, SAVING_PREFERENCE);
-          result = true;
-        } else if (recordCount === 0) {
-          metadata.put(candidate, ENCRYPTION_KEY);
-          metadata.put(candidateId, ENCRYPTION_KEY_ID);
-          metadata.put(true, SAVING_PREFERENCE);
-          result = true;
-        } else {
-          failed = true;
-          transaction.abort();
-        }
-      };
-      const done = () => { if (--remaining === 0) finish(); };
-      metadata.get(ENCRYPTION_KEY).onsuccess = event => { key = (event.target as IDBRequest).result; done(); };
-      metadata.get(ENCRYPTION_KEY_ID).onsuccess = event => { keyId = (event.target as IDBRequest).result; done(); };
-      transaction.objectStore(ENTRIES_STORE).count().onsuccess = event => { recordCount = (event.target as IDBRequest<number>).result; done(); };
-      transaction.oncomplete = () => resolve(result);
-      transaction.onerror = () => reject(transaction.error ?? new Error('Could not enable sender history'));
-      transaction.onabort = () => failed ? resolve(false) : reject(transaction.error ?? new Error('Could not enable sender history'));
     });
   }
 
@@ -182,12 +130,21 @@ class IndexedDbSecretHistoryStorage implements SecretHistoryStorage {
 
   async clearEntries(): Promise<number> {
     const database = await this.openDatabase();
-    return this.clearWithPreference(database, false);
-  }
-
-  async disable(): Promise<number> {
-    const database = await this.openDatabase();
-    return this.clearWithPreference(database, true);
+    return new Promise((resolve, reject) => {
+      const transaction = database.transaction([ENTRIES_STORE, METADATA_STORE], 'readwrite');
+      const entries = transaction.objectStore(ENTRIES_STORE);
+      const metadata = transaction.objectStore(METADATA_STORE);
+      let nextEpoch = 1;
+      entries.clear();
+      metadata.get(HISTORY_EPOCH).onsuccess = event => {
+        const previous = (event.target as IDBRequest).result;
+        nextEpoch = (typeof previous === 'number' && Number.isSafeInteger(previous) ? previous : 0) + 1;
+        metadata.put(nextEpoch, HISTORY_EPOCH);
+      };
+      transaction.oncomplete = () => resolve(nextEpoch);
+      transaction.onerror = () => reject(transaction.error ?? new Error('Could not clear sender history'));
+      transaction.onabort = () => reject(transaction.error ?? new Error('Could not clear sender history'));
+    });
   }
 
   private async guardedEntryWrite(database: IDBDatabase, entry: EncryptedHistoryRecord, keyId: string, epoch: number, expectedCiphertext?: ArrayBuffer): Promise<boolean> {
@@ -195,14 +152,13 @@ class IndexedDbSecretHistoryStorage implements SecretHistoryStorage {
       const transaction = database.transaction([ENTRIES_STORE, METADATA_STORE], 'readwrite');
       const metadata = transaction.objectStore(METADATA_STORE);
       const entries = transaction.objectStore(ENTRIES_STORE);
-      let enabled: unknown;
       let key: unknown;
       let storedKeyId: unknown;
       let storedEpoch: unknown;
       let accepted = false;
-      let remaining = 4;
+      let remaining = 3;
       const finish = () => {
-        if (enabled === false || !isUsableKey(key) || storedKeyId !== keyId || (typeof storedEpoch === 'number' ? storedEpoch : 0) !== epoch) return;
+        if (!isUsableKey(key) || storedKeyId !== keyId || (typeof storedEpoch === 'number' ? storedEpoch : 0) !== epoch) return;
         const save = () => {
           entries.put(entry);
           accepted = true;
@@ -219,7 +175,6 @@ class IndexedDbSecretHistoryStorage implements SecretHistoryStorage {
         }
       };
       const done = () => { if (--remaining === 0) finish(); };
-      metadata.get(SAVING_PREFERENCE).onsuccess = event => { enabled = (event.target as IDBRequest).result; done(); };
       metadata.get(ENCRYPTION_KEY).onsuccess = event => { key = (event.target as IDBRequest).result; done(); };
       metadata.get(ENCRYPTION_KEY_ID).onsuccess = event => { storedKeyId = (event.target as IDBRequest).result; done(); };
       metadata.get(HISTORY_EPOCH).onsuccess = event => { storedEpoch = (event.target as IDBRequest).result; done(); };
@@ -229,38 +184,9 @@ class IndexedDbSecretHistoryStorage implements SecretHistoryStorage {
     });
   }
 
-  private async clearWithPreference(database: IDBDatabase, disable: boolean): Promise<number> {
-    return new Promise((resolve, reject) => {
-      const transaction = database.transaction([ENTRIES_STORE, METADATA_STORE], 'readwrite');
-      const entries = transaction.objectStore(ENTRIES_STORE);
-      const metadata = transaction.objectStore(METADATA_STORE);
-      let nextEpoch = 1;
-      entries.clear();
-      metadata.get(HISTORY_EPOCH).onsuccess = event => {
-        const previous = (event.target as IDBRequest).result;
-        nextEpoch = (typeof previous === 'number' && Number.isSafeInteger(previous) ? previous : 0) + 1;
-        metadata.put(nextEpoch, HISTORY_EPOCH);
-        if (disable) {
-          metadata.delete(ENCRYPTION_KEY);
-          metadata.delete(ENCRYPTION_KEY_ID);
-          metadata.put(false, SAVING_PREFERENCE);
-        }
-      };
-      transaction.oncomplete = () => resolve(nextEpoch);
-      transaction.onerror = () => reject(transaction.error ?? new Error('Could not clear sender history'));
-      transaction.onabort = () => reject(transaction.error ?? new Error('Could not clear sender history'));
-    });
-  }
-
   private async getMetadata(key: string): Promise<unknown> {
     const database = await this.openDatabase();
     return this.request(database.transaction(METADATA_STORE, 'readonly').objectStore(METADATA_STORE).get(key));
-  }
-
-  private async putMetadata(key: string, value: unknown): Promise<void> {
-    const database = await this.openDatabase();
-    await this.transaction(database.transaction(METADATA_STORE, 'readwrite'), transaction =>
-      transaction.objectStore(METADATA_STORE).put(value, key));
   }
 
   private openDatabase(): Promise<IDBDatabase> {
@@ -287,15 +213,6 @@ class IndexedDbSecretHistoryStorage implements SecretHistoryStorage {
     });
   }
 
-  private transaction(transaction: IDBTransaction, queue: (transaction: IDBTransaction) => void): Promise<void> {
-    return new Promise((resolve, reject) => {
-      transaction.oncomplete = () => resolve();
-      transaction.onerror = () => reject(transaction.error ?? new Error('Sender history transaction failed'));
-      transaction.onabort = () => reject(transaction.error ?? new Error('Sender history transaction aborted'));
-      try { queue(transaction); }
-      catch (error) { transaction.abort(); reject(error); }
-    });
-  }
 }
 
 /** Owns encrypted, browser-local sender history and its asynchronous IndexedDB lifecycle. */
@@ -304,7 +221,6 @@ export class SecretHistoryStore {
   private readonly storage = inject(SECRET_HISTORY_STORAGE);
   private readonly destroyRef = inject(DestroyRef);
   private readonly mutableEntries = signal<SecretHistoryEntry[]>([]);
-  private readonly savingEnabled = signal(true);
   private readonly unavailable = signal(0);
   private key?: CryptoKey;
   private keyId?: string;
@@ -316,7 +232,6 @@ export class SecretHistoryStore {
   private channel?: BroadcastChannel;
 
   readonly entries = this.mutableEntries.asReadonly();
-  readonly enabled = this.savingEnabled.asReadonly();
   readonly initialized = signal(false);
   readonly unavailableEntries = this.unavailable.asReadonly();
   readonly locked = signal(false);
@@ -336,7 +251,6 @@ export class SecretHistoryStore {
 
   async add(entry: SecretHistoryEntry): Promise<boolean> {
     return this.mutate(async (key, keyId, epoch) => {
-      if (!this.enabled()) return false;
       if (!isHistoryEntry(entry)) throw new Error('Invalid history entry');
       const encrypted = await encryptEntry(entry, key);
       return this.storage.addEntryIfCurrent(encrypted, keyId, epoch);
@@ -387,79 +301,10 @@ export class SecretHistoryStore {
     });
   }
 
-  async enable(): Promise<boolean> {
-    await this.ready;
-    return this.withMutationLock(async () => {
-      try {
-        const snapshotEpoch = await this.storage.getEpoch();
-        const existingEntries = await this.storage.getEntries();
-        const keyId = await this.storage.getKeyId();
-        let key = await this.storage.getKey();
-        if ((!key || !keyId) && existingEntries.length > 0) {
-          this.unavailable.set(existingEntries.length);
-          this.error.set('unavailable');
-          this.saveFailed.set(true);
-          return false;
-        }
-        if (!key || !keyId) {
-          const material = await this.createKeyMaterial();
-          if (!await this.storage.enableWithKey(material.key, material.id)) {
-            this.saveFailed.set(true);
-            this.error.set('unavailable');
-            return false;
-          }
-        } else if (!await this.storage.enableWithKey(key, keyId)) return false;
-        key = await this.storage.getKey();
-        const installedKeyId = await this.storage.getKeyId();
-        if (!key || !installedKeyId) throw new Error('History key is unavailable');
-        this.epoch = snapshotEpoch;
-        this.keyId = installedKeyId;
-        this.key = key;
-        this.savingEnabled.set(true);
-        this.error.set(null);
-        this.saveFailed.set(false);
-        this.generation++;
-        await this.refreshEntries(key, existingEntries, ++this.refreshVersion, this.generation, snapshotEpoch, installedKeyId);
-        this.broadcast();
-        return true;
-      } catch {
-        this.saveFailed.set(true);
-        this.error.set('storage');
-        return false;
-      }
-    });
-  }
-
-  async disable(): Promise<boolean> {
-    await this.ready;
-    this.generation++;
-    this.refreshVersion++;
-    return this.withMutationLock(async () => {
-      try {
-        this.epoch = await this.storage.disable();
-        this.key = undefined;
-        this.keyId = undefined;
-        this.savingEnabled.set(false);
-        this.mutableEntries.set([]);
-        this.unavailable.set(0);
-        this.error.set(null);
-        this.saveFailed.set(false);
-        this.cancelExpiryCleanup();
-        this.broadcast();
-        return true;
-      } catch {
-        this.saveFailed.set(true);
-        this.error.set('storage');
-        return false;
-      }
-    });
-  }
-
   async pruneExpired(): Promise<boolean> {
     await this.ready;
     return this.withMutationLock(async () => {
       try {
-        if (await this.storage.getPreference() === false) return true;
         const snapshotEpoch = await this.storage.getEpoch();
         const records = await this.storage.getEntries();
         const key = await this.storage.getKey();
@@ -484,9 +329,6 @@ export class SecretHistoryStore {
   private async initialize(): Promise<void> {
     await this.withMutationLock(async () => {
       try {
-        const enabled = await this.storage.getPreference();
-        this.savingEnabled.set(enabled !== false);
-        if (enabled === false) return;
         const snapshotEpoch = await this.storage.getEpoch();
         const records = await this.storage.getEntries();
         let key = await this.storage.getKey();
@@ -501,7 +343,9 @@ export class SecretHistoryStore {
         if (!key || !keyId) {
           const material = await this.createKeyMaterial();
           if (!await this.storage.putKeyIfAbsent(material.key, material.id)) {
-            this.savingEnabled.set(false);
+            this.unavailable.set(records.length);
+            this.error.set('unavailable');
+            this.saveFailed.set(true);
             return;
           }
           key = await this.storage.getKey();
@@ -526,18 +370,6 @@ export class SecretHistoryStore {
     const refreshVersion = ++this.refreshVersion;
     const currentGeneration = this.generation;
     try {
-      const enabled = await this.storage.getPreference();
-      if (enabled === false) {
-        if (refreshVersion !== this.refreshVersion || currentGeneration !== this.generation) return;
-        this.generation++;
-        this.key = undefined;
-        this.keyId = undefined;
-        this.savingEnabled.set(false);
-        this.mutableEntries.set([]);
-        this.unavailable.set(0);
-        this.cancelExpiryCleanup();
-        return;
-      }
       const snapshotEpoch = await this.storage.getEpoch();
       const records = await this.storage.getEntries();
       let key = await this.storage.getKey();
@@ -560,7 +392,6 @@ export class SecretHistoryStore {
       }
       if (!key || !keyId || refreshVersion !== this.refreshVersion || currentGeneration !== this.generation) return;
       this.epoch = snapshotEpoch;
-      this.savingEnabled.set(true);
       this.key = key;
       this.keyId = keyId;
       await this.refreshEntries(key, records, refreshVersion, currentGeneration, snapshotEpoch, keyId);
@@ -591,11 +422,11 @@ export class SecretHistoryStore {
     }));
     entries.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
     if (refreshVersion !== this.refreshVersion || generation !== this.generation) return;
-    const [enabled, currentKeyId, currentEpoch] = await Promise.all([
-      this.storage.getPreference(), this.storage.getKeyId(), this.storage.getEpoch()
+    const [currentKeyId, currentEpoch] = await Promise.all([
+      this.storage.getKeyId(), this.storage.getEpoch()
     ]);
     if (refreshVersion !== this.refreshVersion || generation !== this.generation) return;
-    if (enabled === false || currentKeyId !== snapshotKeyId || currentEpoch !== snapshotEpoch) {
+    if (currentKeyId !== snapshotKeyId || currentEpoch !== snapshotEpoch) {
       void this.refresh();
       return;
     }
@@ -608,22 +439,10 @@ export class SecretHistoryStore {
 
   private async mutate<T>(operation: (key: CryptoKey, keyId: string, epoch: number) => Promise<T>): Promise<T | false> {
     await this.ready;
-    if (!this.enabled()) return false;
     const generation = this.generation;
     return this.withMutationLock(async () => {
       try {
-        if (generation !== this.generation || !this.enabled()) return false;
-        if (await this.storage.getPreference() === false) {
-          this.generation++;
-          this.refreshVersion++;
-          this.key = undefined;
-          this.keyId = undefined;
-          this.savingEnabled.set(false);
-          this.mutableEntries.set([]);
-          this.unavailable.set(0);
-          this.cancelExpiryCleanup();
-          return false;
-        }
+        if (generation !== this.generation) return false;
         const snapshotEpoch = await this.storage.getEpoch();
         let key = await this.storage.getKey();
         let keyId = await this.storage.getKeyId();

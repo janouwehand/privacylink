@@ -7,15 +7,6 @@ export class MemoryHistoryStorage implements SecretHistoryStorage {
   private pendingAddGate?: { started: () => void; wait: Promise<void>; release: () => void };
   private pendingEntriesGate?: { started: () => void; wait: Promise<void>; release: () => void };
 
-  async getPreference(): Promise<boolean | undefined> {
-    const value = this.metadata.get('savingEnabled');
-    return typeof value === 'boolean' ? value : undefined;
-  }
-
-  async setPreference(enabled: boolean): Promise<void> {
-    this.metadata.set('savingEnabled', enabled);
-  }
-
   async getKey(): Promise<CryptoKey | undefined> {
     const value = this.metadata.get('encryptionKey');
     return isCryptoKey(value) ? value : undefined;
@@ -32,27 +23,12 @@ export class MemoryHistoryStorage implements SecretHistoryStorage {
   }
 
   async putKeyIfAbsent(candidate: CryptoKey, candidateId: string): Promise<boolean> {
-    if (this.metadata.get('savingEnabled') === false) return false;
     const current = this.metadata.get('encryptionKey');
     const currentId = await this.getKeyId();
     if (isCryptoKey(current) && currentId) return true;
     if (this.records.size > 0) return false;
     this.metadata.set('encryptionKey', candidate);
     this.metadata.set('encryptionKeyId', candidateId);
-    return true;
-  }
-
-  async enableWithKey(candidate: CryptoKey, candidateId: string): Promise<boolean> {
-    const current = this.metadata.get('encryptionKey');
-    const currentId = await this.getKeyId();
-    if (isCryptoKey(current) && currentId) {
-      this.metadata.set('savingEnabled', true);
-      return true;
-    }
-    if (this.records.size > 0) return false;
-    this.metadata.set('encryptionKey', candidate);
-    this.metadata.set('encryptionKeyId', candidateId);
-    this.metadata.set('savingEnabled', true);
     return true;
   }
 
@@ -75,7 +51,7 @@ export class MemoryHistoryStorage implements SecretHistoryStorage {
       await gate.wait;
     }
     if (this.failWrites) throw new Error('Storage unavailable');
-    if (this.metadata.get('savingEnabled') === false || !isCryptoKey(this.metadata.get('encryptionKey'))
+    if (!isCryptoKey(this.metadata.get('encryptionKey'))
       || this.metadata.get('encryptionKeyId') !== keyId
       || (typeof this.metadata.get('historyEpoch') === 'number' ? this.metadata.get('historyEpoch') : 0) !== epoch
       || this.records.has(entry.id)) return false;
@@ -86,7 +62,7 @@ export class MemoryHistoryStorage implements SecretHistoryStorage {
   async replaceEntryIfCurrent(entry: EncryptedHistoryRecord, expectedCiphertext: ArrayBuffer, keyId: string, epoch: number): Promise<boolean> {
     if (this.failWrites) throw new Error('Storage unavailable');
     const current = this.records.get(entry.id);
-    if (this.metadata.get('savingEnabled') === false || !isCryptoKey(this.metadata.get('encryptionKey'))
+    if (!isCryptoKey(this.metadata.get('encryptionKey'))
       || this.metadata.get('encryptionKeyId') !== keyId
       || (typeof this.metadata.get('historyEpoch') === 'number' ? this.metadata.get('historyEpoch') : 0) !== epoch
       || !current || !equalBytes(current.ciphertext, expectedCiphertext)) return false;
@@ -102,16 +78,6 @@ export class MemoryHistoryStorage implements SecretHistoryStorage {
 
   async clearEntries(): Promise<number> {
     this.records.clear();
-    const epoch = (typeof this.metadata.get('historyEpoch') === 'number' ? this.metadata.get('historyEpoch') as number : 0) + 1;
-    this.metadata.set('historyEpoch', epoch);
-    return epoch;
-  }
-
-  async disable(): Promise<number> {
-    this.records.clear();
-    this.metadata.delete('encryptionKey');
-    this.metadata.delete('encryptionKeyId');
-    this.metadata.set('savingEnabled', false);
     const epoch = (typeof this.metadata.get('historyEpoch') === 'number' ? this.metadata.get('historyEpoch') as number : 0) + 1;
     this.metadata.set('historyEpoch', epoch);
     return epoch;

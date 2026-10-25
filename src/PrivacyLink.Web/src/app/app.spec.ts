@@ -850,7 +850,8 @@ describe('App', () => {
     fixture.detectChanges();
     const compiled = fixture.nativeElement as HTMLElement;
 
-    expect(compiled.querySelector('.history-vault-notice input')).toBeNull();
+    expect(compiled.querySelector('.history-vault-actions')).toBeNull();
+    expect(compiled.textContent).not.toContain('Turn off and erase history');
     expect(compiled.querySelector('#unlock-history-dialog')).toBeNull();
     expect(compiled.querySelector('.history-table')).not.toBeNull();
     compiled.querySelector<HTMLButtonElement>('.history-label-action')!.click();
@@ -908,7 +909,7 @@ describe('App', () => {
     await vi.waitFor(() => expect(store.entries()).toHaveLength(0));
   });
 
-  it('clears history without disabling automatic saving, and disables and re-enables with a fresh key', async () => {
+  it('clears history and continues saving newly created links automatically', async () => {
     const store = TestBed.inject(SecretHistoryStore);
     await store.whenReady();
     const initialKey = historyStorage.metadata.get('encryptionKey');
@@ -922,7 +923,6 @@ describe('App', () => {
     });
 
     expect(await store.clear()).toBe(true);
-    expect(store.enabled()).toBe(true);
     expect(historyStorage.metadata.get('encryptionKey')).toBe(initialKey);
     expect(historyStorage.records.size).toBe(0);
 
@@ -934,16 +934,7 @@ describe('App', () => {
       password: '',
       revokeToken: 'revoke-token'
     })).toBe(true);
-    expect(await store.disable()).toBe(true);
-    expect(store.enabled()).toBe(false);
-    expect(historyStorage.metadata.get('savingEnabled')).toBe(false);
-    expect(historyStorage.metadata.has('encryptionKey')).toBe(false);
-    expect(historyStorage.records.size).toBe(0);
-
-    expect(await store.enable()).toBe(true);
-    expect(store.enabled()).toBe(true);
-    expect(historyStorage.metadata.get('encryptionKey')).not.toBe(initialKey);
-    expect(store.entries()).toEqual([]);
+    expect(store.entries().map(item => item.id)).toEqual(['DDDDDDDDDDDDDDDDDDDDDD']);
   });
 
   it('keeps a created link available and warns when browser history storage fails', async () => {

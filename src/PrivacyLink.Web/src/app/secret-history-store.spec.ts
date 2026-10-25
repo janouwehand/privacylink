@@ -65,9 +65,7 @@ describe('SecretHistoryStore', () => {
     const store = await createStore();
     const key = storage.metadata.get('encryptionKey') as CryptoKey;
 
-    expect(store.enabled()).toBe(true);
     expect(store.entries()).toEqual([]);
-    expect(await storage.getPreference()).toBeUndefined();
     expect(key.extractable).toBe(false);
     expect(key.algorithm).toMatchObject({ name: 'AES-GCM', length: 256 });
     expect(key.usages).toEqual(['encrypt', 'decrypt']);
@@ -194,33 +192,9 @@ describe('SecretHistoryStore', () => {
     const key = storage.metadata.get('encryptionKey');
 
     expect(await store.clear()).toBe(true);
-    expect(store.enabled()).toBe(true);
     expect(store.entries()).toEqual([]);
     expect(storage.records.size).toBe(0);
     expect(storage.metadata.get('encryptionKey')).toBe(key);
-  });
-
-  it('persists disablement across store instances and creates a fresh key when re-enabled', async () => {
-    const first = await createStore();
-    await first.add(entry('secret-one'));
-    const firstKey = storage.metadata.get('encryptionKey');
-
-    expect(await first.disable()).toBe(true);
-    expect(storage.records.size).toBe(0);
-    expect(storage.metadata.has('encryptionKey')).toBe(false);
-    expect(await storage.getPreference()).toBe(false);
-
-    const reloaded = await createStore();
-    expect(reloaded.enabled()).toBe(false);
-    expect(reloaded.entries()).toEqual([]);
-
-    expect(await reloaded.enable()).toBe(true);
-    const secondKey = storage.metadata.get('encryptionKey');
-    expect(secondKey).toBeDefined();
-    expect(secondKey).not.toBe(firstKey);
-    expect(reloaded.entries()).toEqual([]);
-    expect(await reloaded.add(entry('new-secret'))).toBe(true);
-    expect(reloaded.entries()).toEqual([entry('new-secret')]);
   });
 
   it('preserves concurrent writes from independent store instances', async () => {
@@ -249,26 +223,6 @@ describe('SecretHistoryStore', () => {
       pause.release();
       expect(await pendingAdd).toBe(false);
       expect(storage.records.size).toBe(0);
-    } finally {
-      if (lockDescriptor) Object.defineProperty(navigator, 'locks', lockDescriptor);
-      else Reflect.deleteProperty(navigator, 'locks');
-    }
-  });
-
-  it('rejects a paused add racing disable when Web Locks are unavailable', async () => {
-    const [addingTab, disablingTab] = await createIndependentStores(2);
-    const lockDescriptor = Object.getOwnPropertyDescriptor(navigator, 'locks');
-    Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined });
-    try {
-      const pause = storage.pauseNextAdd();
-      const pendingAdd = addingTab.add(entry('racing-disable'));
-      await pause.started;
-
-      expect(await disablingTab.disable()).toBe(true);
-      pause.release();
-      expect(await pendingAdd).toBe(false);
-      expect(storage.records.size).toBe(0);
-      expect(await storage.getPreference()).toBe(false);
     } finally {
       if (lockDescriptor) Object.defineProperty(navigator, 'locks', lockDescriptor);
       else Reflect.deleteProperty(navigator, 'locks');

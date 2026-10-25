@@ -13,10 +13,7 @@ export class HistoryState {
 
   readonly secretHistory: SecretHistoryStore['entries'];
   readonly historyStorageWarning: SecretHistoryStore['saveFailed'];
-  readonly historyEnabled: SecretHistoryStore['enabled'];
   readonly storeUnavailable: SecretHistoryStore['unavailableEntries'];
-  readonly vaultBusy = signal(false);
-  readonly disableHistoryDialogOpen = signal(false);
   readonly visibleHistoryPasswords = signal<Set<string>>(new Set());
   readonly historyCopiedId = signal('');
   readonly historyCopyFailed = signal(false);
@@ -34,7 +31,6 @@ export class HistoryState {
   constructor() {
     this.secretHistory = this.store.entries;
     this.historyStorageWarning = this.store.saveFailed;
-    this.historyEnabled = this.store.enabled;
     this.storeUnavailable = this.store.unavailableEntries;
   }
 
@@ -115,22 +111,6 @@ export class HistoryState {
   async saveLabel(entry: SecretHistoryEntry): Promise<void> {
     if (!await this.store.updateLabel(entry.id, this.labelDraft())) return;
     this.cancelLabelEdit();
-  }
-
-  async enableHistory(): Promise<void> {
-    this.vaultBusy.set(true);
-    try { await this.store.enable(); }
-    finally { this.vaultBusy.set(false); }
-  }
-
-  requestDisableHistory(): void { this.disableHistoryDialogOpen.set(true); }
-  closeDisableHistoryDialog(): void { this.disableHistoryDialogOpen.set(false); }
-
-  async confirmDisableHistory(): Promise<void> {
-    this.vaultBusy.set(true);
-    try {
-      if (await this.store.disable()) this.closeDisableHistoryDialog();
-    } finally { this.vaultBusy.set(false); }
   }
 
   async navigateToHistory(): Promise<void> { await this.router.navigateByUrl('/history'); }

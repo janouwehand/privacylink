@@ -65,7 +65,6 @@ export class CreateState {
   readonly passwordGeneratorOpen = signal(false);
   readonly emptyMessageDialogOpen = signal(false);
   readonly historyStorageWarning: SecretHistoryStore['saveFailed'] = this.history.saveFailed;
-  readonly historyEnabled: SecretHistoryStore['enabled'] = this.history.enabled;
   readonly historyWarning = signal<'saveFailed' | null>(null);
   readonly canShare = this.sharing.canShare;
 
@@ -377,7 +376,6 @@ export class CreateState {
     try {
       this.historyWarning.set(null);
       await this.history.whenReady();
-      const saveHistory = this.history.enabled();
       const encrypted = await encryptMessage(this.message());
       const clientKey = decodeCanonical(encrypted.clientKey, 32);
       const requestWithoutFiles = {
@@ -396,7 +394,7 @@ export class CreateState {
       this.clearLinkCopiedFeedback();
       this.resultAccessCode.set(this.password());
       this.resultAccessCodeCopied.set(false);
-      if (saveHistory && !await this.history.add({
+      if (!await this.history.add({
           id: created.id,
           createdAt: new Date().toISOString(),
           link: this.shareLink(),
