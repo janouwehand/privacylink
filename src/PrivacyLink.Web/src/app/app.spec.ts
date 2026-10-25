@@ -769,6 +769,7 @@ describe('App', () => {
     expect(copyAccessCodeButton?.getAttribute('aria-label')).toBe('Copy access code');
     expect(copyAccessCodeButton?.textContent?.trim()).toBe('');
     expect(copyAccessCodeButton?.classList.contains('is-copied')).toBe(true);
+    expect(compiled.querySelector('[data-testid="copy-access-code-status"]')?.textContent?.trim()).toBe('Access code copied');
 
     compiled.querySelector<HTMLButtonElement>('[data-testid="copy-result-link"]')!.click();
     await fixture.whenStable();
@@ -777,6 +778,7 @@ describe('App', () => {
     const copyLinkButton = compiled.querySelector<HTMLButtonElement>('[data-testid="copy-result-link"]');
     expect(copyLinkButton?.getAttribute('aria-label')).toBe('Copy link');
     expect(copyLinkButton?.classList.contains('is-copied')).toBe(true);
+    expect(compiled.querySelector('[data-testid="copy-link-status"]')?.textContent?.trim()).toBe('Link copied');
 
     await TestBed.inject(Router).navigateByUrl('/security');
     await fixture.whenStable();
@@ -954,7 +956,7 @@ describe('App', () => {
     await fixture.whenStable();
     fixture.detectChanges();
     expect(store.entries()).toEqual([]);
-    expect(compiled.querySelector('.card [role="status"]')?.textContent).toContain('This link was not added');
+    expect(compiled.querySelector('.card .info[role="status"]')?.textContent).toContain('This link was not added');
     expect(compiled.querySelector<HTMLAnchorElement>('.header-tools .history-nav-link')?.textContent).toContain('History');
     expect(create.historyEnabledFromResult()).toBe(true);
 
@@ -974,7 +976,7 @@ describe('App', () => {
     fixture.detectChanges();
     expect(TestBed.inject(AppState).mode()).toBe('result');
     expect(store.entries()).toHaveLength(1);
-    expect(compiled.querySelector('.card [role="status"]')).toBeNull();
+    expect(compiled.querySelector('.card .info[role="status"]')).toBeNull();
   });
 
   it('opens the shared unlock dialog from the create header and stays on the create form after success', async () => {
