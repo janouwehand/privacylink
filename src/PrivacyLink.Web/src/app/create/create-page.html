@@ -44,12 +44,6 @@
           <summary aria-controls="security-disclosure-content">
             <span class="security-disclosure-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 10V7a5 5 0 0 1 10 0v3"></path><rect x="4.5" y="10" width="15" height="11" rx="1.5"></rect><path d="M12 14v3"></path></svg></span>
             <div class="security-disclosure-copy"><h2>{{ language.t('securityDisclosureTitle') }}</h2><span class="security-disclosure-hint">{{ language.t('securityDisclosureHint') }}</span></div>
-            <span class="security-disclosure-status" aria-live="polite">
-              @if (create.password() && create.emailVerificationEnabled()) { {{ language.t('securityBothSet') }} }
-              @else if (create.password()) { {{ language.t('securityAccessCodeSet') }} }
-              @else if (create.emailVerificationEnabled()) { {{ language.t('securityEmailVerificationSet') }} }
-              @else { {{ language.t('securityNoneSet') }} }
-            </span>
             <svg class="security-disclosure-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
           </summary>
           <div class="security-disclosure-content" id="security-disclosure-content">
@@ -69,6 +63,10 @@
             </div>
           </div>
         </details>
+      </div>
+      <div class="field-note security-status-summary" aria-live="polite">
+        <span>{{ language.t(create.password() ? 'securityAccessCodeInUse' : 'securityAccessCodeAvailable') }}</span>
+        <span>{{ language.t(create.emailVerificationEnabled() ? 'securityEmailVerificationInUse' : 'securityEmailVerificationAvailable') }}</span>
       </div>
     </div>
     @if (create.error().length) { <p class="error" role="alert">{{ create.errorText() }}</p> }

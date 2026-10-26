@@ -632,7 +632,9 @@ describe('App', () => {
     const securityDisclosure = compiled.querySelector<HTMLDetailsElement>('[data-testid="security-disclosure"]')!;
 
     expect(securityDisclosure.open).toBe(false);
-    expect(compiled.querySelector('.security-disclosure-status')?.textContent).toContain('Not configured');
+    expect(compiled.querySelector('.security-disclosure-status')).toBeNull();
+    expect(compiled.querySelector('.security-status-summary')?.textContent).toContain('Access code: available');
+    expect(compiled.querySelector('.security-status-summary')?.textContent).toContain('Email verification: available');
     expect(compiled.querySelector('#expiry')).not.toBeNull();
     expect(compiled.querySelector('#access-code-input')?.closest('dialog')?.open).toBe(false);
     expect(compiled.querySelector('#password-copy-title')).toBeNull();
@@ -680,7 +682,7 @@ describe('App', () => {
     fixture.detectChanges();
     expect(create.password()).toBe(accessCode);
     expect(compiled.querySelector('.security-option-summary')?.textContent).toContain('Access code set');
-    expect(compiled.querySelector('.security-disclosure-status')?.textContent).toContain('Access code set');
+    expect(compiled.querySelector('.security-status-summary')?.textContent).toContain('Access code: in use');
     const accessCodeAction = compiled.querySelector<HTMLButtonElement>('[data-testid="access-code-action"]')!;
     expect(accessCodeAction.textContent).toContain('Remove');
     expect(accessCodeAction.getAttribute('aria-label')).toBe('Remove access code');
@@ -728,6 +730,7 @@ describe('App', () => {
     compiled.querySelector<HTMLFormElement>('.email-verification-form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     fixture.detectChanges();
     expect(create.emailVerificationEnabled()).toBe(true);
+    expect(compiled.querySelector('.security-status-summary')?.textContent).toContain('Email verification: in use');
     const emailVerificationAction = compiled.querySelector<HTMLButtonElement>('[data-testid="email-verification-action"]')!;
     expect(emailVerificationAction.textContent).toContain('Remove');
     expect(emailVerificationAction.getAttribute('aria-label')).toBe('Remove email verification');
