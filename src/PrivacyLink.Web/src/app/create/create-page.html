@@ -37,8 +37,8 @@
           <div class="dropzone-content"><span class="upload-icon" aria-hidden="true">↑</span><strong>{{ language.t('dropFiles') }}</strong><span>{{ language.t('dropOr') }}</span><label class="file-button" for="files">{{ language.t('chooseFiles') }}</label></div>
           @if (create.selectedFiles().length) { <ul class="file-list">@for (file of create.selectedFiles(); track $index) { <li><span>{{ file.name }} ({{ create.formatFileSize(file.size) }})</span><button class="remove-file" type="button" [attr.aria-label]="language.t('removeFileWithName', { name: file.name })" [title]="language.t('removeFile')" (click)="create.removeFile($index)" [disabled]="create.busy()">×</button></li> }</ul> }
         </div>
-        <div class="field-note file-count" aria-live="polite"><span>{{ create.fileUsageSummary() }}</span><span class="file-limit-note">{{ create.fileLimitHint() }}</span></div>
       </div>
+      <div class="field-note file-count" aria-live="polite"><span>{{ create.fileUsageSummary() }}</span><span class="file-limit-note">{{ create.fileLimitHint() }}</span></div>
       <div class="link-settings">
         <details class="security-disclosure" data-testid="security-disclosure">
           <summary aria-controls="security-disclosure-content">
