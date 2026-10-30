@@ -252,7 +252,7 @@ describe('App', () => {
     expect(api.open).not.toHaveBeenCalled();
   });
 
-  it('opens unprotected content through the worker using the raw response', async () => {
+  it('keeps the website recipient flow available when extension site access is unavailable', async () => {
     const encrypted = await encryptMessage('Worker opened this message');
     const id = 'AAAAAAAAAAAAAAAAAAAAAA';
     api.openRaw.mockResolvedValue(new TextEncoder().encode(JSON.stringify({ protocolVersion: 1, message: encrypted.message, files: [] })).buffer);
