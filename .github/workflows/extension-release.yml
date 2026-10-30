@@ -4,7 +4,7 @@ run-name: Release extension ${{ github.ref_name }}
 on:
   push:
     tags:
-      - 'extension-v*'
+      - "extension-v*"
   workflow_dispatch:
 
 permissions:
@@ -98,6 +98,9 @@ jobs:
     needs: package
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    concurrency:
+      group: chrome-extension-store-submission
+      queue: max
     environment:
       name: chrome-web-store-release
       url: https://chrome.google.com/webstore/devconsole

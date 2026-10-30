@@ -12,6 +12,8 @@ Before the first release, create a GitHub Actions environment named `chrome-web-
 
 The credentialed job has a job-level check for a tag ref starting with `refs/tags/extension-v` and does not request the protected environment until that condition passes. GitHub environment approval happens before the job can read its environment secrets. Configure the environment rules in repository settings; workflow YAML cannot create or verify those repository settings.
 
+The credentialed Store job uses a tag-independent concurrency group with a queue so uploads and review submissions for different release tags cannot race against the same Store item or replace an earlier queued submission.
+
 ## Environment secrets
 
 - `VERIFIED_CRX_PRIVATE_KEY`: PEM-encoded RSA private key matching the public key enrolled for Verified CRX uploads.
