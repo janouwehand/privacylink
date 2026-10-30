@@ -18,6 +18,28 @@
       <form id="create-form" novalidate>
         <label for="secret-message">Your text</label>
         <textarea id="secret-message" name="message" rows="7" maxlength="40000" required placeholder="Write the message you want to share"></textarea>
+        <div class="file-field">
+          <label for="secret-files">Files</label>
+          <input id="secret-files" name="files" type="file" multiple />
+          <p id="file-limit-note" class="field-note">Loading file limits…</p>
+          <ul id="selected-files" class="file-list"></ul>
+          <p id="file-error" class="error-message compact-error" role="alert"></p>
+        </div>
+        <fieldset class="protection-options">
+          <legend>Optional protection</legend>
+          <label class="checkbox-row" for="secret-password-enabled"><input id="secret-password-enabled" type="checkbox" /> Protect with an access code</label>
+          <div id="password-container" hidden>
+            <label for="secret-password">Access code</label>
+            <input id="secret-password" type="text" autocomplete="off" />
+            <p class="field-note">Share this code with the recipient separately.</p>
+          </div>
+          <label class="checkbox-row" for="email-verification-enabled"><input id="email-verification-enabled" type="checkbox" /> Require email verification</label>
+          <div id="recipient-email-container" hidden>
+            <label for="recipient-email">Recipient email address</label>
+            <input id="recipient-email" type="email" autocomplete="email" placeholder="name@example.com" />
+            <p class="field-note">The recipient requests a one-time code after opening the link. No email is sent when you create it.</p>
+          </div>
+        </fieldset>
         <div class="field-row">
           <label for="secret-expiry">Expires after</label>
           <select id="secret-expiry" name="expiry">
@@ -38,6 +60,13 @@
         <input id="share-link" type="url" readonly />
         <button id="copy-link-button" class="secondary-button" type="button">Copy share link</button>
         <p id="copy-status" class="field-note" role="status"></p>
+        <div id="success-password" hidden>
+          <label for="result-password">Access code</label>
+          <input id="result-password" type="text" readonly />
+          <button id="copy-password-button" class="secondary-button" type="button">Copy access code</button>
+          <p id="password-copy-status" class="field-note" role="status"></p>
+          <p class="field-note">Send the access code separately from the share link.</p>
+        </div>
       </section>
       <p class="privacy-note">Encrypted in this extension before upload. The client key stays in the share link.</p>
     </main>

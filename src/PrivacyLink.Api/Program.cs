@@ -176,6 +176,7 @@ app.Use(async (context, next) =>
     var request = context.Request;
     var isCreate = request.Path.Equals("/api/v1/secrets", StringComparison.OrdinalIgnoreCase);
     var isCreateChallenge = request.Path.Equals("/api/v1/secrets/create-challenge", StringComparison.OrdinalIgnoreCase);
+    var isCapabilities = request.Path.Equals("/api/v1/capabilities", StringComparison.OrdinalIgnoreCase);
     var hasOrigin = request.Headers.TryGetValue("Origin", out var originHeader);
     var origin = hasOrigin ? originHeader.ToString() : null;
     var isExtensionOrigin = origin is not null && ChromeExtensionOrigin.IsExtensionOrigin(origin);
@@ -183,7 +184,7 @@ app.Use(async (context, next) =>
     if (isExtensionOrigin)
     {
         var allowedExtensionRequest = string.Equals(origin, configuredChromeExtensionOrigin, StringComparison.Ordinal) &&
-            (HttpMethods.IsGet(request.Method) && isCreateChallenge || HttpMethods.IsPost(request.Method) && isCreate);
+            (HttpMethods.IsGet(request.Method) && (isCreateChallenge || isCapabilities) || HttpMethods.IsPost(request.Method) && isCreate);
         if (!allowedExtensionRequest)
         {
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
