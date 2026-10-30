@@ -1,11 +1,10 @@
 import { Injectable } from '@angular/core';
+import type { CreateChallenge } from '../../../PrivacyLink.Client/src';
 import { EncryptedFile, EncryptedFileMetadata, EncryptedMessage, EncryptedPayload, OpenedFile } from './secret-crypto';
 
 export class SecretApiError extends Error {
   constructor(readonly status: number, readonly retryAfterSeconds: number | null = null, readonly code: string | null = null) { super(`HTTP ${status}`); }
 }
-
-interface CreateChallenge { version: number; challengeId: string; nonce: string; difficultyBits: number; expiresAt: number; signature: string }
 
 async function apiError(response: Response): Promise<SecretApiError> {
   const retryAfter = Number.parseInt(response.headers.get('Retry-After') ?? '', 10);

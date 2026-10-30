@@ -110,7 +110,8 @@ The independent protocol check uses Node Web Crypto, creates temporary test mess
 | `src/PrivacyLink.Services` | Secret use cases, application models, and storage abstractions |
 | `src/PrivacyLink.Infrastructure` | PostgreSQL metadata, blob storage, and storage lifecycle |
 | `src/PrivacyLink.Contracts` | Shared C# API contracts |
-| `src/PrivacyLink.Web` | Angular SPA and browser cryptography |
+| `src/PrivacyLink.Client` | Framework-independent TypeScript cryptography, protocol types, and create-proof logic shared by browser clients |
+| `src/PrivacyLink.Web` | Angular SPA and web-specific UI |
 | `tests/PrivacyLink.Api.Tests` | Backend unit tests |
 | `tests/PrivacyLink.IntegrationTests` | Backend integration tests |
 | `scripts/verify-prototype.mjs` | Independent Web Crypto and HTTP check |

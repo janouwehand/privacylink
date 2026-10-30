@@ -1,4 +1,4 @@
-import { decryptFile, decryptFileName, decryptMessage, encodeBase64Url, encryptFile, EncryptedFile, EncryptedFileMetadata, EncryptedPayload, FileCryptoPhase, OpenedFile } from './secret-crypto';
+import { decryptFile, decryptFileName, decryptMessage, encodeBase64Url, encryptFile, EncryptedFile, EncryptedFileMetadata, EncryptedPayload, FileCryptoPhase, OpenedFile, solveCreateProof } from '../../../PrivacyLink.Client/src';
 
 type Operation = 'encryptFile' | 'decryptFile' | 'decryptFileName' | 'serializeCreateRequest' | 'encryptFilesAndSerialize' | 'decryptOpenFileResponse' | 'decryptOpenSecretResponse' | 'decryptCachedFile' | 'clearCachedFiles' | 'solveCreateProof' | 'cancelProof';
 interface RequestMessage {
@@ -35,21 +35,7 @@ async function processRequest(data: RequestMessage): Promise<void> {
     switch (operation) {
       case 'solveCreateProof': {
         const challenge = payload as { challengeId: string; nonce: string; difficultyBits: number };
-        const encoder = new TextEncoder();
-        const maxCounter = 0xffffffffffffffffn;
-        for (let counter = 0n; counter <= maxCounter; counter++) {
-          if (cancelledProofs.has(id)) throw new Error('Proof calculation cancelled');
-          const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(`PrivacyLink-Create-PoW-v1:${challenge.challengeId}:${challenge.nonce}:${counter}`)));
-          let zeroBits = 0;
-          for (const byte of digest) {
-            if (byte === 0) { zeroBits += 8; continue; }
-            zeroBits += Math.clz32(byte) - 24;
-            break;
-          }
-          if (zeroBits >= challenge.difficultyBits) { result = counter.toString(); break; }
-          if ((counter & 2047n) === 2047n) await new Promise(resolve => setTimeout(resolve, 0));
-        }
-        if (result === undefined) throw new Error('Proof counter exhausted');
+        result = await solveCreateProof(challenge, () => cancelledProofs.has(id));
         break;
       }
       case 'encryptFile':
