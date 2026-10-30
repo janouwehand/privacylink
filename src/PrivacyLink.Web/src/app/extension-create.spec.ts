@@ -114,6 +114,34 @@ describe('PrivacyLink extension create popup', () => {
     expect(popup.querySelector<HTMLElement>('#success-panel')!.hidden).toBe(true);
   });
 
+  it('preserves text entered while the create request is pending', async () => {
+    let resolveCreate: ((response: Response) => void) | undefined;
+    let notifyCreateStarted!: () => void;
+    const createStarted = new Promise<void>(resolve => { notifyCreateStarted = resolve; });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/create-challenge')) return new Response(JSON.stringify(challenge), { status: 200 });
+      notifyCreateStarted();
+      return new Promise<Response>(resolve => { resolveCreate = resolve; });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const popup = mountPopup(async () => {});
+    const message = popup.querySelector<HTMLTextAreaElement>('#secret-message')!;
+    message.value = 'submitted text';
+    popup.querySelector<HTMLFormElement>('#create-form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+    await createStarted;
+    message.value = 'new text typed while waiting';
+    resolveCreate!(new Response(JSON.stringify({
+      id: 'AAAAAAAAAAAAAAAAAAAAAA',
+      expiresAt: '2030-01-08T12:00:00Z',
+      passwordProtected: false,
+      revokeToken: 'not-retained'
+    }), { status: 201 }));
+
+    await vi.waitFor(() => expect(popup.querySelector<HTMLElement>('#success-panel')!.hidden).toBe(false));
+    expect(message.value).toBe('new text typed while waiting');
+  });
+
   it('gets a fresh create challenge once when the API reports proof_required', async () => {
     let challengeCount = 0;
     let createCount = 0;

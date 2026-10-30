@@ -189,7 +189,7 @@ export function mountCreateForm(document: Document, dependencies: CreateDependen
           ? `This link expires after ${expiry}.`
           : `This link expires ${expiryDate.toLocaleString()}.`;
         successPanel.hidden = false;
-        messageField.value = '';
+        if (messageField.value === plaintext) messageField.value = '';
       } catch (error) {
         errorPanel.textContent = errorMessage(error);
         errorPanel.hidden = false;
