@@ -10,7 +10,7 @@
     "verify:extension": "node ../../scripts/verify-extension-package.mjs",
     "build:container": "powershell -NoProfile -File ../../scripts/build-web-container.ps1",
     "watch": "ng build privacy-link-web --watch --configuration development",
-    "test": "ng test privacy-link-web --watch=false && node ../../scripts/extension-manifest.test.mjs"
+    "test": "ng test privacy-link-web --watch=false && node --test ../../scripts/extension-manifest.test.mjs ../../scripts/extension-release-workflow.test.mjs ../../scripts/chrome-web-store.test.mjs"
   },
   "private": true,
   "packageManager": "npm@11.16.0",
