@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "PrivacyLink",
+  "description": "Create encrypted text secrets with the locally installed PrivacyLink client.",
+  "version": "0.1.0",
+  "permissions": ["clipboardWrite"],
+  "host_permissions": ["https://privacylink.nl/*"],
+  "action": {
+    "default_title": "Create a PrivacyLink secret",
+    "default_popup": "index.html"
+  }
+}
