@@ -14,6 +14,7 @@ services:
       Security__AuditHashKey_FILE: /run/secrets/audit_hash_key
       Security__CreateProofHmacKey_FILE: /run/secrets/create_proof_hmac_key
       Security__CreateProofDifficultyBits: "${PRIVACYLINK_CREATE_PROOF_DIFFICULTY_BITS:-17}"
+      Security__ChromeExtensionOrigin: "${PRIVACYLINK_CHROME_EXTENSION_ORIGIN:-}"
       Security__AdminPassword_FILE: /run/secrets/admin_password
       Security__EmailVerificationHmacKey_FILE: /run/secrets/email_verification_hmac_key
       Resend__ApiKey_FILE: /run/secrets/resend_api_key

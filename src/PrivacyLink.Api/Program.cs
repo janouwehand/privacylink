@@ -114,6 +114,7 @@ builder.Services.AddRateLimiter(options =>
 
 var app = builder.Build();
 ProductionConfiguration.Validate(app.Configuration, app.Environment.IsProduction());
+var configuredChromeExtensionOrigin = ChromeExtensionOrigin.Read(app.Configuration);
 app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
 {
     PrivacyAudit.Log(context, "unhandled_error");
@@ -172,16 +173,43 @@ app.Use(async (context, next) =>
 });
 app.Use(async (context, next) =>
 {
-    if (HttpMethods.IsPost(context.Request.Method) &&
-        (context.Request.Headers.TryGetValue("Origin", out var origin) &&
-         !string.Equals(origin.ToString(), $"{context.Request.Scheme}://{context.Request.Host}", StringComparison.OrdinalIgnoreCase) ||
-         context.Request.Headers.TryGetValue("Sec-Fetch-Site", out var site) && site == "cross-site"))
+    var request = context.Request;
+    var isCreate = request.Path.Equals("/api/v1/secrets", StringComparison.OrdinalIgnoreCase);
+    var isCreateChallenge = request.Path.Equals("/api/v1/secrets/create-challenge", StringComparison.OrdinalIgnoreCase);
+    var hasOrigin = request.Headers.TryGetValue("Origin", out var originHeader);
+    var origin = hasOrigin ? originHeader.ToString() : null;
+    var isExtensionOrigin = origin is not null && ChromeExtensionOrigin.IsExtensionOrigin(origin);
+
+    if (isExtensionOrigin)
+    {
+        var allowedExtensionRequest = string.Equals(origin, configuredChromeExtensionOrigin, StringComparison.Ordinal) &&
+            (HttpMethods.IsGet(request.Method) && isCreateChallenge || HttpMethods.IsPost(request.Method) && isCreate);
+        if (!allowedExtensionRequest)
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await context.Response.WriteAsJsonAsync(new ErrorResponse("forbidden"), PrivacyLinkJsonContext.Default.ErrorResponse);
+            return;
+        }
+
+        await next();
+        return;
+    }
+
+    var isSameOrigin = origin is not null &&
+        string.Equals(origin, $"{request.Scheme}://{request.Host}", StringComparison.OrdinalIgnoreCase);
+    var isCrossSite = request.Headers.TryGetValue("Sec-Fetch-Site", out var site) &&
+        string.Equals(site.ToString(), "cross-site", StringComparison.OrdinalIgnoreCase);
+    var rejectPost = HttpMethods.IsPost(request.Method) &&
+        (hasOrigin && !isSameOrigin || isCrossSite);
+    var rejectChallenge = HttpMethods.IsGet(request.Method) && isCreateChallenge &&
+        (hasOrigin && !isSameOrigin || isCrossSite);
+    if (rejectPost || rejectChallenge)
     {
         context.Response.StatusCode = 403;
         await context.Response.WriteAsJsonAsync(new ErrorResponse("forbidden"), PrivacyLinkJsonContext.Default.ErrorResponse);
         return;
     }
-    await next(context);
+    await next();
 });
 app.UseRateLimiter();
 

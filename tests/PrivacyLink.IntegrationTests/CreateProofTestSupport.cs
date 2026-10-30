@@ -61,18 +61,24 @@ internal sealed class TestCreateProofReplayStore : ICreateProofReplayStore
 
 internal static class CreateProofTestHelper
 {
-    public static async Task<HttpResponseMessage> CreateAsync(HttpClient client, object payload, Action<HttpRequestMessage>? customize = null)
+    public static async Task<HttpResponseMessage> CreateAsync(
+        HttpClient client,
+        object payload,
+        Action<HttpRequestMessage>? customize = null,
+        Action<HttpRequestMessage>? customizeChallenge = null)
     {
-        var proof = await GetProofAsync(client);
+        var proof = await GetProofAsync(client, customizeChallenge);
         using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/secrets") { Content = JsonContent.Create(payload) };
         request.Headers.Add("X-PrivacyLink-Proof", proof);
         customize?.Invoke(request);
         return await client.SendAsync(request);
     }
 
-    public static async Task<string> GetProofAsync(HttpClient client)
+    public static async Task<string> GetProofAsync(HttpClient client, Action<HttpRequestMessage>? customize = null)
     {
-        using var challengeResponse = await client.GetAsync("/api/v1/secrets/create-challenge");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/secrets/create-challenge");
+        customize?.Invoke(request);
+        using var challengeResponse = await client.SendAsync(request);
         challengeResponse.EnsureSuccessStatusCode();
         using var challenge = System.Text.Json.JsonDocument.Parse(await challengeResponse.Content.ReadAsStringAsync());
         var root = challenge.RootElement;
