@@ -1,6 +1,6 @@
 # PrivacyLink Chrome extension
 
-This package is a standalone Manifest V3 extension for creating and opening PrivacyLink secrets. The popup creates text secrets. A locally bundled, isolated content script handles only canonical share links on `https://privacylink.nl/s/*`; it validates the link, removes the fragment from the website URL before website scripts start, and renders the recipient flow inside a closed shadow root. The extension code uses the framework-independent `PrivacyLink.Client` TypeScript core for encryption and decryption.
+This package is a standalone Manifest V3 extension for creating and opening PrivacyLink secrets. The popup creates text and file secrets with the website's expiry, optional access-code, and email-verification settings. The extension loads the existing file upload capabilities and enforces their advertised count, total-size, and extension limits before upload. A locally bundled crypto worker encrypts files. A locally bundled, isolated content script handles only canonical share links on `https://privacylink.nl/s/*`; it validates the link, removes the fragment from the website URL before website scripts start, and renders the recipient flow inside a closed shadow root. The extension code uses the framework-independent `PrivacyLink.Client` TypeScript core for encryption and decryption.
 
 ## Build and load locally
 
@@ -15,7 +15,7 @@ In Chrome, open `chrome://extensions`, enable Developer mode, then choose **Load
 
 All popup HTML, styles, recipient code, and executable JavaScript are included in the generated package. The manifest grants clipboard write and access to the PrivacyLink host only. Its content script matches the share-route family, runs in the isolated world and top frame, and declines any route that does not contain a canonical secret ID and fragment key. It makes same-origin API calls from the PrivacyLink page so existing email-verification cookies continue to work. The fragment key stays in the content script's memory for validation and local decryption; it is not sent to the API, stored, or passed through extension messages. If site access is not granted, Chrome does not inject the content script and the website continues handling the route.
 
-The runtime API calls are the existing create, metadata, open, unlock, email-verification, and file-open routes on `https://privacylink.nl`. No API route or payload contract is added or changed.
+The runtime API calls use the existing capabilities, create, metadata, open, unlock, email-verification, and file-open routes on `https://privacylink.nl`. The API narrowly allows the configured extension origin to read the existing capabilities route so the popup can follow deployment-specific file limits and types. No API route, request/response contract, or wire format is added or changed. The client key remains only in the returned share link fragment and local encryption context; sender history, share links, and revoke tokens are not stored.
 
 ## Runtime configuration
 

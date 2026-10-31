@@ -44,6 +44,13 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         using var challenge = await client.SendAsync(challengeRequest);
         Assert.Equal(HttpStatusCode.OK, challenge.StatusCode);
 
+        using var capabilitiesRequest = new HttpRequestMessage(HttpMethod.Get, "/api/v1/capabilities");
+        SetExtensionOrigin(capabilitiesRequest);
+        using var capabilities = await client.SendAsync(capabilitiesRequest);
+        Assert.Equal(HttpStatusCode.OK, capabilities.StatusCode);
+        using var capabilitiesBody = JsonDocument.Parse(await capabilities.Content.ReadAsStringAsync());
+        Assert.Equal(15, capabilitiesBody.RootElement.GetProperty("maxFiles").GetInt32());
+
         using var missingProofRequest = new HttpRequestMessage(HttpMethod.Post, "/api/v1/secrets")
         {
             Content = new StringContent("not json", System.Text.Encoding.UTF8, "application/json")
@@ -76,6 +83,10 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         unsetCreateRequest.Headers.Add("Sec-Fetch-Site", "cross-site");
         using var unsetCreateResponse = await unsetClient.SendAsync(unsetCreateRequest);
         Assert.Equal(HttpStatusCode.Forbidden, unsetCreateResponse.StatusCode);
+        using var unsetCapabilitiesRequest = new HttpRequestMessage(HttpMethod.Get, "/api/v1/capabilities");
+        unsetCapabilitiesRequest.Headers.Add("Origin", TestChromeExtensionOrigin);
+        using var unsetCapabilitiesResponse = await unsetClient.SendAsync(unsetCapabilitiesRequest);
+        Assert.Equal(HttpStatusCode.Forbidden, unsetCapabilitiesResponse.StatusCode);
 
         using var configuredFactory = new TestApiFactory().WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -87,10 +98,14 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         otherIdRequest.Headers.Add("Sec-Fetch-Site", "cross-site");
         using var otherIdResponse = await configuredClient.SendAsync(otherIdRequest);
         Assert.Equal(HttpStatusCode.Forbidden, otherIdResponse.StatusCode);
+        using var otherIdCapabilities = new HttpRequestMessage(HttpMethod.Get, "/api/v1/capabilities");
+        otherIdCapabilities.Headers.Add("Origin", "chrome-extension://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        using var otherIdCapabilitiesResponse = await configuredClient.SendAsync(otherIdCapabilities);
+        Assert.Equal(HttpStatusCode.Forbidden, otherIdCapabilitiesResponse.StatusCode);
     }
 
     [Fact]
-    public async Task ChromeExtensionOriginIsDeniedForOtherRoutesAndMethods()
+    public async Task ChromeExtensionOriginCanReadCapabilitiesAndIsDeniedForOtherRoutesAndMethods()
     {
         using var factory = new TestApiFactory().WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -100,10 +115,15 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
 
         using var otherRoute = new HttpRequestMessage(HttpMethod.Get, "/api/v1/capabilities");
         otherRoute.Headers.Add("Origin", TestChromeExtensionOrigin);
-        using var rejectedRoute = await client.SendAsync(otherRoute);
+        using var allowedCapabilities = await client.SendAsync(otherRoute);
+        Assert.Equal(HttpStatusCode.OK, allowedCapabilities.StatusCode);
+
+        using var unrelatedRoute = new HttpRequestMessage(HttpMethod.Get, "/api/v1/stats");
+        unrelatedRoute.Headers.Add("Origin", TestChromeExtensionOrigin);
+        using var rejectedRoute = await client.SendAsync(unrelatedRoute);
         Assert.Equal(HttpStatusCode.Forbidden, rejectedRoute.StatusCode);
 
-        using var otherMethod = new HttpRequestMessage(HttpMethod.Put, "/api/v1/secrets");
+        using var otherMethod = new HttpRequestMessage(HttpMethod.Put, "/api/v1/capabilities");
         otherMethod.Headers.Add("Origin", TestChromeExtensionOrigin);
         using var rejectedMethod = await client.SendAsync(otherMethod);
         Assert.Equal(HttpStatusCode.Forbidden, rejectedMethod.StatusCode);

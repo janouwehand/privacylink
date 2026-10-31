@@ -21,10 +21,24 @@ label { display: block; margin-bottom: 7px; font-size: 13px; font-weight: 650; }
 textarea, select, input { width: 100%; border: 1px solid #cbd8d4; border-radius: 9px; background: #fff; color: inherit; font: inherit; }
 textarea { min-height: 140px; padding: 11px 12px; resize: vertical; line-height: 1.5; }
 input { padding: 10px; font-size: 12px; }
+input[type="file"] { padding: 8px; font-size: 12px; }
+input[type="checkbox"] { width: 16px; height: 16px; accent-color: #176d55; }
 select { width: auto; min-width: 122px; padding: 8px 10px; }
 textarea:focus, select:focus, input:focus { outline: 3px solid #a6dac8; outline-offset: 1px; border-color: #298367; }
 .field-row { display: flex; align-items: center; justify-content: space-between; margin: 16px 0; }
 .field-row label { margin: 0; }
+.file-field { margin-top: 16px; }
+.field-note { margin: 6px 0 10px; color: #52655f; font-size: 11px; line-height: 1.45; }
+.file-list { display: grid; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; }
+.file-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 9px; border-radius: 7px; background: #eef4f1; font-size: 11px; }
+.file-list li span { min-width: 0; overflow-wrap: anywhere; }
+.remove-file { flex: 0 0 auto; width: auto; padding: 4px 8px; background: transparent; color: #52655f; font-size: 11px; }
+.protection-options { display: grid; gap: 10px; margin: 16px 0; padding: 12px; border: 1px solid #d8e2de; border-radius: 9px; }
+.protection-options legend { padding: 0 4px; font-size: 12px; font-weight: 700; }
+.checkbox-row { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 12px; font-weight: 550; }
+.checkbox-row input { flex: 0 0 auto; margin: 0; }
+.protection-options [hidden], #success-password[hidden] { display: none; }
+.compact-error { margin: 7px 0 0; }
 button { width: 100%; border: 0; border-radius: 9px; padding: 11px 14px; font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; }
 button:focus-visible { outline: 3px solid #81c9af; outline-offset: 2px; }
 button:disabled { cursor: wait; opacity: .7; }

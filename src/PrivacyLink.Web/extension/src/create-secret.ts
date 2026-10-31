@@ -1,23 +1,34 @@
-import { decodeCanonical, encryptMessage, solveCreateProof, type CreateChallenge, type EncryptedMessage } from '../../../PrivacyLink.Client/src';
+import { decodeCanonical, derivePasswordToken, encryptMessage, solveCreateProof, type CreateChallenge, type EncryptedFile, type EncryptedMessage } from '../../../PrivacyLink.Client/src';
+import { SecretCryptoWorkerClient } from '../../src/app/secret-crypto-worker-client';
 
 type Expiry = '1d' | '7d' | '14d';
+export interface FileUploadPolicy { maxFiles: number; maxTotalFileBytes: number; allowedFileExtensions: string[] }
 type CreateRequest = {
   protocolVersion: 1;
   expiry: Expiry;
-  message: EncryptedMessage;
-  files: [];
+  message: EncryptedMessage | null;
+  files: EncryptedFile[];
+  password?: string;
+  emailAddress?: string;
 };
-type CreateResponse = { id: string; expiresAt: string; passwordProtected: boolean; revokeToken: string };
+type CreateResponse = { id: string; expiresAt: string; passwordProtected: boolean };
 type ApiError = Error & { status?: number; code?: string };
 
 export interface CreateApi {
+  getFileUploadPolicy(): Promise<FileUploadPolicy>;
   getCreateChallenge(): Promise<CreateChallenge>;
   create(request: CreateRequest, proof: string): Promise<CreateResponse>;
+  createSerialized(body: ArrayBuffer, proof: string): Promise<CreateResponse>;
+}
+
+export interface CreateFileCrypto {
+  encryptFilesAndSerialize(request: Omit<CreateRequest, 'files'>, files: File[], clientKey: Uint8Array): Promise<ArrayBuffer>;
 }
 
 export interface CreateDependencies {
   api: CreateApi;
   copyText(value: string): Promise<void>;
+  fileCrypto?: CreateFileCrypto;
 }
 
 const API_ORIGIN = 'https://privacylink.nl';
@@ -48,6 +59,13 @@ async function parseResponse<T>(response: Response): Promise<T> {
 }
 
 export const privacyLinkCreateApi: CreateApi = {
+  getFileUploadPolicy(): Promise<FileUploadPolicy> {
+    return fetch(`${API_ORIGIN}/api/v1/capabilities`, {
+      cache: 'no-store',
+      referrerPolicy: 'no-referrer'
+    }).then(response => parseResponse<FileUploadPolicy>(response));
+  },
+
   getCreateChallenge(): Promise<CreateChallenge> {
     return fetch(`${API_ORIGIN}/api/v1/secrets/create-challenge`, {
       cache: 'no-store',
@@ -63,8 +81,20 @@ export const privacyLinkCreateApi: CreateApi = {
       cache: 'no-store',
       referrerPolicy: 'no-referrer'
     }).then(response => parseResponse<CreateResponse>(response));
+  },
+
+  createSerialized(body: ArrayBuffer, proof: string): Promise<CreateResponse> {
+    return fetch(`${API_ORIGIN}/api/v1/secrets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-PrivacyLink-Proof': proof },
+      body,
+      cache: 'no-store',
+      referrerPolicy: 'no-referrer'
+    }).then(response => parseResponse<CreateResponse>(response));
   }
 };
+
+const defaultFileCrypto: CreateFileCrypto = new SecretCryptoWorkerClient();
 
 export function browserClipboard(document: Document): (value: string) => Promise<void> {
   return async value => {
@@ -94,11 +124,11 @@ async function solveFreshProof(api: CreateApi): Promise<string> {
   return challengeHeader(challenge, counter);
 }
 
-async function createWithProof(api: CreateApi, request: CreateRequest): Promise<CreateResponse> {
+async function createWithProof(api: CreateApi, request: CreateRequest, serializedBody?: ArrayBuffer): Promise<CreateResponse> {
   for (let attempt = 0; ; attempt++) {
     const proof = await solveFreshProof(api);
     try {
-      return await api.create(request, proof);
+      return serializedBody ? await api.createSerialized(serializedBody, proof) : await api.create(request, proof);
     } catch (error) {
       const apiError = error as ApiError;
       if (apiError.status !== 403 || apiError.code !== 'proof_required' || attempt > 0) throw error;
@@ -109,11 +139,11 @@ async function createWithProof(api: CreateApi, request: CreateRequest): Promise<
 function errorMessage(error: unknown): string {
   const apiError = error as ApiError;
   if (apiError.status === 403 && apiError.code === 'forbidden') {
-    return 'PrivacyLink rejected this extension request because the API currently accepts creation only from the website. Your text is still in this form. Open privacylink.nl to create it for now.';
+    return 'PrivacyLink rejected this extension request because extension creation is not enabled on the API. Your content is still in this form. Open privacylink.nl to create it for now.';
   }
   if (apiError.status === 429) return 'Too many secrets have been created recently. Please wait and try again.';
   if (apiError.status === 403 && apiError.code === 'proof_required') return 'PrivacyLink could not validate the create challenge. Please try again.';
-  return 'The secret could not be created. Your text is still in this form. Check your connection and try again.';
+  return 'The secret could not be created. Your content is still in this form. Check your connection and try again.';
 }
 
 export function mountCreateForm(document: Document, dependencies: CreateDependencies = {
@@ -123,6 +153,16 @@ export function mountCreateForm(document: Document, dependencies: CreateDependen
   const form = document.querySelector<HTMLFormElement>('#create-form');
   const messageField = document.querySelector<HTMLTextAreaElement>('#secret-message');
   const expiryField = document.querySelector<HTMLSelectElement>('#secret-expiry');
+  const fileInput = document.querySelector<HTMLInputElement>('#secret-files');
+  const fileList = document.querySelector<HTMLElement>('#selected-files');
+  const fileLimitNote = document.querySelector<HTMLElement>('#file-limit-note');
+  const fileError = document.querySelector<HTMLElement>('#file-error');
+  const passwordEnabledField = document.querySelector<HTMLInputElement>('#secret-password-enabled');
+  const passwordContainer = document.querySelector<HTMLElement>('#password-container');
+  const passwordField = document.querySelector<HTMLInputElement>('#secret-password');
+  const emailEnabledField = document.querySelector<HTMLInputElement>('#email-verification-enabled');
+  const emailField = document.querySelector<HTMLInputElement>('#recipient-email');
+  const emailContainer = document.querySelector<HTMLElement>('#recipient-email-container');
   const createButton = document.querySelector<HTMLButtonElement>('#create-button');
   const errorPanel = document.querySelector<HTMLElement>('#error-message');
   const successPanel = document.querySelector<HTMLElement>('#success-panel');
@@ -131,8 +171,89 @@ export function mountCreateForm(document: Document, dependencies: CreateDependen
   const copyStatus = document.querySelector<HTMLElement>('#copy-status');
   const expiryMessage = document.querySelector<HTMLElement>('#expiry-message');
 
-  if (!form || !messageField || !expiryField || !createButton || !errorPanel || !successPanel || !linkField || !copyButton || !copyStatus || !expiryMessage) {
+  const successPassword = document.querySelector<HTMLElement>('#success-password');
+  const passwordValue = document.querySelector<HTMLInputElement>('#result-password');
+  const copyPasswordButton = document.querySelector<HTMLButtonElement>('#copy-password-button');
+  const passwordCopyStatus = document.querySelector<HTMLElement>('#password-copy-status');
+
+  if (!form || !messageField || !expiryField || !fileInput || !fileList || !fileLimitNote || !fileError || !passwordEnabledField || !passwordContainer || !passwordField || !emailEnabledField || !emailField || !emailContainer || !createButton || !errorPanel || !successPanel || !linkField || !copyButton || !copyStatus || !expiryMessage || !successPassword || !passwordValue || !copyPasswordButton || !passwordCopyStatus) {
     throw new Error('PrivacyLink extension create form is incomplete');
+  }
+
+  const files: File[] = [];
+  fileError.hidden = true;
+  let filePolicy: FileUploadPolicy | undefined;
+  let filePolicyReady = false;
+  void dependencies.api.getFileUploadPolicy().then(policy => {
+    if (!Number.isInteger(policy.maxFiles) || policy.maxFiles < 1 || !Number.isSafeInteger(policy.maxTotalFileBytes) || policy.maxTotalFileBytes < 1 || !Array.isArray(policy.allowedFileExtensions) || policy.allowedFileExtensions.some(extension => typeof extension !== 'string' || !/^\.[a-z0-9]{1,15}$/.test(extension))) {
+      throw new Error('Invalid file upload policy');
+    }
+    filePolicy = { ...policy, allowedFileExtensions: [...new Set(policy.allowedFileExtensions)] };
+    fileInput.accept = filePolicy.allowedFileExtensions.join(',');
+    fileLimitNote.textContent = `Up to ${filePolicy.maxFiles} files and ${formatFileSize(filePolicy.maxTotalFileBytes)} total. Allowed types: ${filePolicy.allowedFileExtensions.join(', ')}.`;
+    filePolicyReady = true;
+  }).catch(() => {
+    filePolicyReady = false;
+    fileLimitNote.textContent = 'File limits could not be loaded. Check your connection and try again.';
+  });
+
+  const renderFiles = (): void => {
+    fileList.replaceChildren();
+    for (const [index, file] of files.entries()) {
+      const item = document.createElement('li');
+      const label = document.createElement('span');
+      label.textContent = `${file.name} (${formatFileSize(file.size)})`;
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'remove-file';
+      remove.textContent = 'Remove';
+      remove.setAttribute('aria-label', `Remove ${file.name}`);
+      remove.addEventListener('click', () => { files.splice(index, 1); fileError.textContent = ''; fileError.hidden = true; renderFiles(); });
+      item.append(label, remove);
+      fileList.append(item);
+    }
+  };
+
+  const addFiles = (selected: FileList | null): void => {
+    fileError.textContent = '';
+    fileError.hidden = true;
+    if (!filePolicyReady || !filePolicy) {
+      fileError.textContent = 'File limits are not available yet. Try again when they have loaded.';
+      fileError.hidden = false;
+      fileInput.value = '';
+      return;
+    }
+    const errors: string[] = [];
+    for (const file of Array.from(selected ?? [])) {
+      const dot = file.name.lastIndexOf('.');
+      const extension = dot >= 0 ? file.name.slice(dot).toLowerCase() : '';
+      if (!filePolicy.allowedFileExtensions.includes(extension)) { errors.push(`${file.name}: unsupported file type.`); continue; }
+      if (file.size < 1) { errors.push(`${file.name}: empty files are not supported.`); continue; }
+      if (files.some(existing => existing.name === file.name && existing.size === file.size && existing.lastModified === file.lastModified && existing.type === file.type)) continue;
+      if (files.length >= filePolicy.maxFiles) { errors.push(`You can add at most ${filePolicy.maxFiles} files.`); continue; }
+      const currentTotal = files.reduce((total, existing) => total + existing.size, 0);
+      if (file.size > filePolicy.maxTotalFileBytes - currentTotal) { errors.push(`The selected files exceed the ${formatFileSize(filePolicy.maxTotalFileBytes)} total limit.`); continue; }
+      files.push(file);
+    }
+    fileInput.value = '';
+    fileError.textContent = errors.join(' ');
+    fileError.hidden = errors.length === 0;
+    renderFiles();
+  };
+  fileInput.addEventListener('change', () => addFiles(fileInput.files));
+  passwordEnabledField.addEventListener('change', () => {
+    passwordContainer.hidden = !passwordEnabledField.checked;
+    passwordField.required = passwordEnabledField.checked;
+    if (!passwordEnabledField.checked) passwordField.value = '';
+  });
+  emailEnabledField.addEventListener('change', () => {
+    emailContainer.hidden = !emailEnabledField.checked;
+    emailField.required = emailEnabledField.checked;
+  });
+
+  function formatFileSize(bytes: number): string {
+    if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
   }
 
   form.addEventListener('submit', event => {
@@ -141,7 +262,7 @@ export function mountCreateForm(document: Document, dependencies: CreateDependen
 
     const plaintext = messageField.value;
     const expiry = expiryValue(expiryField.value);
-    if (!plaintext.trim()) {
+    if (!plaintext.trim() && files.length === 0) {
       errorPanel.textContent = 'Enter some text before creating a secret.';
       errorPanel.hidden = false;
       successPanel.hidden = true;
@@ -164,7 +285,30 @@ export function mountCreateForm(document: Document, dependencies: CreateDependen
       expiryField.focus();
       return;
     }
+    if (files.length && (!filePolicyReady || !filePolicy)) {
+      errorPanel.textContent = 'File limits could not be loaded. Check your connection and try again.';
+      errorPanel.hidden = false;
+      successPanel.hidden = true;
+      return;
+    }
+    const password = passwordEnabledField.checked ? passwordField.value : '';
+    if (passwordEnabledField.checked && !password.trim()) {
+      errorPanel.textContent = 'Enter an access code or turn off access-code protection.';
+      errorPanel.hidden = false;
+      successPanel.hidden = true;
+      passwordField.focus();
+      return;
+    }
+    const emailAddress = emailEnabledField.checked ? emailField.value.trim() : '';
+    if (emailEnabledField.checked && (!emailAddress || !emailField.checkValidity())) {
+      errorPanel.textContent = 'Enter a valid recipient email address.';
+      errorPanel.hidden = false;
+      successPanel.hidden = true;
+      emailField.focus();
+      return;
+    }
 
+    const selectedFiles = [...files];
     void (async () => {
       errorPanel.hidden = true;
       successPanel.hidden = true;
@@ -174,13 +318,19 @@ export function mountCreateForm(document: Document, dependencies: CreateDependen
       try {
         const encrypted = await encryptMessage(plaintext);
         decodeCanonical(encrypted.clientKey, 32);
-        const request: CreateRequest = {
+        const requestWithoutFiles: Omit<CreateRequest, 'files'> = {
           protocolVersion: 1,
           expiry,
-          message: encrypted.message,
-          files: []
+          message: plaintext.trim() ? encrypted.message : null,
+          ...(password ? { password: await derivePasswordToken(password, encrypted.clientKey) } : {}),
+          ...(emailAddress ? { emailAddress } : {})
         };
-        const created = await createWithProof(dependencies.api, request);
+        const created = selectedFiles.length
+          ? await (async () => {
+              const body = await (dependencies.fileCrypto ?? defaultFileCrypto).encryptFilesAndSerialize(requestWithoutFiles, selectedFiles, decodeCanonical(encrypted.clientKey, 32));
+              return createWithProof(dependencies.api, { ...requestWithoutFiles, files: [] }, body);
+            })()
+          : await createWithProof(dependencies.api, { ...requestWithoutFiles, files: [] });
         decodeCanonical(created.id, 16);
         const shareLink = `${SHARE_ORIGIN}/s/${created.id}#${encrypted.clientKey}`;
         linkField.value = shareLink;
@@ -189,7 +339,13 @@ export function mountCreateForm(document: Document, dependencies: CreateDependen
           ? `This link expires after ${expiry}.`
           : `This link expires ${expiryDate.toLocaleString()}.`;
         successPanel.hidden = false;
+        passwordValue.value = password;
+        successPassword.hidden = !password;
         if (messageField.value === plaintext) messageField.value = '';
+        if (passwordField.value === password) passwordField.value = '';
+        const submittedFiles = new Set(selectedFiles);
+        for (let index = files.length - 1; index >= 0; index--) if (submittedFiles.has(files[index]!)) files.splice(index, 1);
+        renderFiles();
       } catch (error) {
         errorPanel.textContent = errorMessage(error);
         errorPanel.hidden = false;
@@ -208,6 +364,18 @@ export function mountCreateForm(document: Document, dependencies: CreateDependen
       linkField.focus();
       linkField.select();
       copyStatus.textContent = 'Could not copy automatically. The link is selected so you can copy it manually.';
+    });
+  });
+
+  copyPasswordButton.addEventListener('click', () => {
+    const password = passwordValue.value;
+    if (!password) return;
+    void dependencies.copyText(password).then(() => {
+      passwordCopyStatus.textContent = 'Access code copied.';
+    }).catch(() => {
+      passwordValue.focus();
+      passwordValue.select();
+      passwordCopyStatus.textContent = 'Could not copy automatically. Select and copy the access code.';
     });
   });
 }
