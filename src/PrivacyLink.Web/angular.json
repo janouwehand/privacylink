@@ -78,6 +78,51 @@
           "builder": "@angular/build:unit-test"
         }
       }
+    },
+    "privacy-link-extension": {
+      "projectType": "application",
+      "root": "extension",
+      "sourceRoot": "extension/src",
+      "prefix": "plx",
+      "architect": {
+        "build": {
+          "builder": "@angular/build:application",
+          "options": {
+            "browser": "extension/src/main.ts",
+            "index": "extension/index.html",
+            "tsConfig": "extension/tsconfig.json",
+            "assets": [
+              {
+                "glob": "manifest.json",
+                "input": "extension",
+                "output": "."
+              }
+            ],
+            "styles": [
+              "extension/styles.css"
+            ],
+            "outputPath": "dist/privacy-link-extension"
+          },
+          "configurations": {
+            "production": {
+              "optimization": {
+                "scripts": true,
+                "styles": {
+                  "minify": true,
+                  "inlineCritical": false
+                }
+              },
+              "sourceMap": false,
+              "outputHashing": "none"
+            },
+            "development": {
+              "optimization": false,
+              "sourceMap": true
+            }
+          },
+          "defaultConfiguration": "production"
+        }
+      }
     }
   }
 }

@@ -3,11 +3,13 @@
   "version": "0.0.0",
   "scripts": {
     "ng": "ng",
-    "start": "ng serve --proxy-config proxy.conf.json",
-    "build": "ng build",
+    "start": "ng serve privacy-link-web --proxy-config proxy.conf.json",
+    "build": "ng build privacy-link-web",
+    "build:extension": "ng build privacy-link-extension",
+    "verify:extension": "node ../../scripts/verify-extension-package.mjs",
     "build:container": "powershell -NoProfile -File ../../scripts/build-web-container.ps1",
-    "watch": "ng build --watch --configuration development",
-    "test": "ng test --watch=false"
+    "watch": "ng build privacy-link-web --watch --configuration development",
+    "test": "ng test privacy-link-web --watch=false && node ../../scripts/extension-manifest.test.mjs"
   },
   "private": true,
   "packageManager": "npm@11.16.0",

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Create a PrivacyLink secret</title>
+  </head>
+  <body>
+    <main class="popup">
+      <header class="brand">
+        <div class="brand-mark" aria-hidden="true">P</div>
+        <div>
+          <p class="eyebrow">PRIVACYLINK</p>
+          <h1>Create a secret</h1>
+        </div>
+      </header>
+
+      <form id="create-form" novalidate>
+        <label for="secret-message">Your text</label>
+        <textarea id="secret-message" name="message" rows="7" maxlength="40000" required placeholder="Write the message you want to share"></textarea>
+        <div class="field-row">
+          <label for="secret-expiry">Expires after</label>
+          <select id="secret-expiry" name="expiry">
+            <option value="1d">1 day</option>
+            <option value="7d" selected>7 days</option>
+            <option value="14d">14 days</option>
+          </select>
+        </div>
+        <button id="create-button" class="primary-button" type="submit">Create secret</button>
+      </form>
+
+      <p id="error-message" class="error-message" role="alert" hidden></p>
+
+      <section id="success-panel" class="success-panel" aria-live="polite" hidden>
+        <h2>Your secret is ready</h2>
+        <p id="expiry-message" class="field-note"></p>
+        <label for="share-link">Share link</label>
+        <input id="share-link" type="url" readonly />
+        <button id="copy-link-button" class="secondary-button" type="button">Copy share link</button>
+        <p id="copy-status" class="field-note" role="status"></p>
+      </section>
+      <p class="privacy-note">Encrypted in this extension before upload. The client key stays in the share link.</p>
+    </main>
+  </body>
+</html>
