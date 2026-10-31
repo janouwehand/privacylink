@@ -8,12 +8,11 @@ import { decodeCanonical, derivePasswordToken, encryptMessage } from '../secret-
 import { SecretHistoryStore } from '../secret-history-store';
 import { WorkProgressState } from '../work-progress-state';
 import { getSecretCryptoWorkerClient } from '../secret-crypto-worker-client';
+import type { CreateChallenge } from '../../../../PrivacyLink.Client/src';
 import type { TranslatableError } from '../translations';
 
 type Expiry = '1d' | '7d' | '14d';
 type FilePolicy = { maxFiles: number; maxTotalFileBytes: number; allowedFileExtensions: string[] };
-type CreateChallenge = { version: number; challengeId: string; nonce: string; difficultyBits: number; expiresAt: number; signature: string };
-
 const MAX_MESSAGE_CHARACTERS = 20000;
 const MAX_MESSAGE_BYTES = MAX_MESSAGE_CHARACTERS * 4;
 const CREATE_CHALLENGE_TTL_MS = 5 * 60 * 1000;

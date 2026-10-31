@@ -1,12 +1,16 @@
 FROM node:24.18-bookworm AS web-build
-WORKDIR /src
+WORKDIR /workspace
 
 ARG APP_VERSION=dev
 
-COPY src/PrivacyLink.Web/package.json src/PrivacyLink.Web/package-lock.json ./
+COPY src/PrivacyLink.Web/package.json src/PrivacyLink.Web/package-lock.json ./src/PrivacyLink.Web/
+WORKDIR /workspace/src/PrivacyLink.Web
 RUN npm ci --ignore-scripts --no-audit --no-fund
 
-COPY src/PrivacyLink.Web/ ./
+WORKDIR /workspace
+COPY src/PrivacyLink.Web/ ./src/PrivacyLink.Web/
+COPY src/PrivacyLink.Client/ ./src/PrivacyLink.Client/
+WORKDIR /workspace/src/PrivacyLink.Web
 RUN APP_VERSION="$APP_VERSION" node -e "require('node:fs').writeFileSync('src/app/app-version.ts', 'export const APP_VERSION = ' + JSON.stringify(process.env.APP_VERSION) + ';\\n')" \
     && npm run build -- --configuration production
 
@@ -38,7 +42,7 @@ LABEL org.opencontainers.image.source="https://github.com/janouwehand/privacylin
       org.opencontainers.image.version="$APP_VERSION"
 
 COPY --from=api-build --chown=1654:1654 /out/ ./
-COPY --from=web-build --chown=1654:1654 /src/dist/privacy-link-web/browser/ ./wwwroot/
+COPY --from=web-build --chown=1654:1654 /workspace/src/PrivacyLink.Web/dist/privacy-link-web/browser/ ./wwwroot/
 
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
