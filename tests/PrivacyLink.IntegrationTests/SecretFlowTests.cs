@@ -9,8 +9,105 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
 {
+    private const string TestChromeExtensionOrigin = "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private readonly HttpClient _client;
     public SecretFlowTests(TestApiFactory factory) => _client = factory.CreateClient();
+
+    [Fact]
+    public async Task SameOriginWebsiteCanUseTheCreateChallengeAndCreateFlow()
+    {
+        var websiteOrigin = _client.BaseAddress!.GetLeftPart(UriPartial.Authority);
+        void SetWebsiteOrigin(HttpRequestMessage request) => request.Headers.Add("Origin", websiteOrigin);
+        var payload = new { protocolVersion = 1, expiry = "1d", message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" }, files = Array.Empty<object>() };
+
+        using var created = await CreateProofTestHelper.CreateAsync(_client, payload, SetWebsiteOrigin, SetWebsiteOrigin);
+
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+    }
+
+    [Fact]
+    public async Task ConfiguredChromeExtensionCanUseCreateChallengeAndCreateWithProof()
+    {
+        using var factory = new TestApiFactory().WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Security:ChromeExtensionOrigin"] = TestChromeExtensionOrigin
+        })));
+        using var client = factory.CreateClient();
+        void SetExtensionOrigin(HttpRequestMessage request)
+        {
+            request.Headers.Add("Origin", TestChromeExtensionOrigin);
+            request.Headers.Add("Sec-Fetch-Site", "cross-site");
+        }
+
+        using var challengeRequest = new HttpRequestMessage(HttpMethod.Get, "/api/v1/secrets/create-challenge");
+        SetExtensionOrigin(challengeRequest);
+        using var challenge = await client.SendAsync(challengeRequest);
+        Assert.Equal(HttpStatusCode.OK, challenge.StatusCode);
+
+        using var missingProofRequest = new HttpRequestMessage(HttpMethod.Post, "/api/v1/secrets")
+        {
+            Content = new StringContent("not json", System.Text.Encoding.UTF8, "application/json")
+        };
+        SetExtensionOrigin(missingProofRequest);
+        using var missingProof = await client.SendAsync(missingProofRequest);
+        Assert.Equal(HttpStatusCode.Forbidden, missingProof.StatusCode);
+        Assert.Equal("{\"code\":\"proof_required\"}", await missingProof.Content.ReadAsStringAsync());
+
+        var payload = new { protocolVersion = 1, expiry = "1d", message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" }, files = Array.Empty<object>() };
+        using var created = await CreateProofTestHelper.CreateAsync(client, payload, SetExtensionOrigin, SetExtensionOrigin);
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+    }
+
+    [Fact]
+    public async Task ChromeExtensionOriginIsDeniedWhenUnsetOrDifferentFromConfiguredId()
+    {
+        using var unsetFactory = new TestApiFactory().WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Security:ChromeExtensionOrigin"] = string.Empty
+        })));
+        using var unsetClient = unsetFactory.CreateClient();
+        using var unsetRequest = new HttpRequestMessage(HttpMethod.Get, "/api/v1/secrets/create-challenge");
+        unsetRequest.Headers.Add("Origin", TestChromeExtensionOrigin);
+        unsetRequest.Headers.Add("Sec-Fetch-Site", "cross-site");
+        using var unsetResponse = await unsetClient.SendAsync(unsetRequest);
+        Assert.Equal(HttpStatusCode.Forbidden, unsetResponse.StatusCode);
+        using var unsetCreateRequest = new HttpRequestMessage(HttpMethod.Post, "/api/v1/secrets");
+        unsetCreateRequest.Headers.Add("Origin", TestChromeExtensionOrigin);
+        unsetCreateRequest.Headers.Add("Sec-Fetch-Site", "cross-site");
+        using var unsetCreateResponse = await unsetClient.SendAsync(unsetCreateRequest);
+        Assert.Equal(HttpStatusCode.Forbidden, unsetCreateResponse.StatusCode);
+
+        using var configuredFactory = new TestApiFactory().WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Security:ChromeExtensionOrigin"] = TestChromeExtensionOrigin
+        })));
+        using var configuredClient = configuredFactory.CreateClient();
+        using var otherIdRequest = new HttpRequestMessage(HttpMethod.Get, "/api/v1/secrets/create-challenge");
+        otherIdRequest.Headers.Add("Origin", "chrome-extension://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        otherIdRequest.Headers.Add("Sec-Fetch-Site", "cross-site");
+        using var otherIdResponse = await configuredClient.SendAsync(otherIdRequest);
+        Assert.Equal(HttpStatusCode.Forbidden, otherIdResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task ChromeExtensionOriginIsDeniedForOtherRoutesAndMethods()
+    {
+        using var factory = new TestApiFactory().WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Security:ChromeExtensionOrigin"] = TestChromeExtensionOrigin
+        })));
+        using var client = factory.CreateClient();
+
+        using var otherRoute = new HttpRequestMessage(HttpMethod.Get, "/api/v1/capabilities");
+        otherRoute.Headers.Add("Origin", TestChromeExtensionOrigin);
+        using var rejectedRoute = await client.SendAsync(otherRoute);
+        Assert.Equal(HttpStatusCode.Forbidden, rejectedRoute.StatusCode);
+
+        using var otherMethod = new HttpRequestMessage(HttpMethod.Put, "/api/v1/secrets");
+        otherMethod.Headers.Add("Origin", TestChromeExtensionOrigin);
+        using var rejectedMethod = await client.SendAsync(otherMethod);
+        Assert.Equal(HttpStatusCode.Forbidden, rejectedMethod.StatusCode);
+    }
 
     [Fact]
     public async Task CreateMetadataAndOpenReturnSameCiphertext()
@@ -37,6 +134,12 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         request.Headers.Add("Origin", "https://evil.example");
         var foreign = await _client.SendAsync(request);
         Assert.Equal(HttpStatusCode.Forbidden, foreign.StatusCode);
+
+        using var foreignChallenge = new HttpRequestMessage(HttpMethod.Get, "/api/v1/secrets/create-challenge");
+        foreignChallenge.Headers.Add("Origin", "https://evil.example");
+        foreignChallenge.Headers.Add("Sec-Fetch-Site", "cross-site");
+        using var rejectedChallenge = await _client.SendAsync(foreignChallenge);
+        Assert.Equal(HttpStatusCode.Forbidden, rejectedChallenge.StatusCode);
     }
 
     [Fact]
@@ -372,6 +475,31 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
 
         Assert.Equal(HttpStatusCode.Created, first.StatusCode);
         Assert.Equal(HttpStatusCode.Created, second.StatusCode);
+    }
+
+    [Fact]
+    public async Task ConfiguredChromeExtensionCreatesRemainSubjectToExistingRateLimits()
+    {
+        using var factory = new TestApiFactory().WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Security:ChromeExtensionOrigin"] = TestChromeExtensionOrigin,
+            ["RateLimiting:CreatePerIpPerHour"] = "1",
+            ["RateLimiting:CreatePerIpPerDay"] = "10"
+        })));
+        using var client = factory.CreateClient();
+        void SetExtensionOrigin(HttpRequestMessage request)
+        {
+            request.Headers.Add("Origin", TestChromeExtensionOrigin);
+            request.Headers.Add("Sec-Fetch-Site", "cross-site");
+        }
+        static object Payload() => new { protocolVersion = 1, expiry = "1d", message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = Convert.ToBase64String(new byte[17]).TrimEnd('=').Replace('+', '-').Replace('/', '_') }, files = Array.Empty<object>() };
+
+        using var first = await CreateProofTestHelper.CreateAsync(client, Payload(), SetExtensionOrigin, SetExtensionOrigin);
+        using var limited = await CreateProofTestHelper.CreateAsync(client, Payload(), SetExtensionOrigin, SetExtensionOrigin);
+
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
+        Assert.Equal("{\"code\":\"rate_limited\"}", await limited.Content.ReadAsStringAsync());
     }
 
     [Fact]
