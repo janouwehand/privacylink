@@ -4,10 +4,17 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const packageRoot = path.join(repositoryRoot, 'src', 'PrivacyLink.Web', 'dist', 'privacy-link-extension', 'browser');
+const packageRoot = process.argv[2]
+  ? path.resolve(process.cwd(), process.argv[2])
+  : path.join(repositoryRoot, 'src', 'PrivacyLink.Web', 'dist', 'privacy-link-extension', 'browser');
+const expectedVersion = process.argv[3];
 const manifest = JSON.parse(await readFile(path.join(packageRoot, 'manifest.json'), 'utf8'));
 
 assert.equal(manifest.manifest_version, 3, 'extension must use Manifest V3');
+assert.match(manifest.version, /^\d+\.\d+\.\d+(?:\.\d+)?$/, 'extension version must be a Chrome-compatible version');
+if (expectedVersion) {
+  assert.equal(manifest.version, expectedVersion, 'extension package version must match the selected release tag');
+}
 assert.deepEqual(manifest.permissions, ['clipboardWrite'], 'extension permissions must remain minimal');
 assert.deepEqual(manifest.host_permissions, ['https://privacylink.nl/*'], 'host access must be limited to the PrivacyLink origin');
 assert.deepEqual(manifest.content_scripts, [{
