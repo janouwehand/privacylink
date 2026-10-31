@@ -10,8 +10,17 @@ const manifest = JSON.parse(await readFile(path.join(packageRoot, 'manifest.json
 assert.equal(manifest.manifest_version, 3, 'extension must use Manifest V3');
 assert.deepEqual(manifest.permissions, ['clipboardWrite'], 'extension permissions must remain minimal');
 assert.deepEqual(manifest.host_permissions, ['https://privacylink.nl/*'], 'host access must be limited to the PrivacyLink origin');
-assert.equal(manifest.content_scripts, undefined, 'extension must not install content scripts');
+assert.deepEqual(manifest.content_scripts, [{
+  matches: ['https://privacylink.nl/s/*'],
+  js: ['recipient-content.js'],
+  run_at: 'document_start',
+  all_frames: false,
+  world: 'ISOLATED'
+}], 'recipient handling must run only in the top frame of PrivacyLink share routes');
 assert.equal(manifest.action.default_popup, 'index.html');
+assert.equal(manifest.background, undefined, 'recipient handoff must not require a background worker');
+assert.equal(manifest.web_accessible_resources, undefined, 'website pages must not load extension resources directly');
+assert.ok(await readFile(path.join(packageRoot, 'recipient-content.js')), 'packaged recipient content script must exist');
 
 const html = await readFile(path.join(packageRoot, manifest.action.default_popup), 'utf8');
 const executableFiles = [...html.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi)].map(match => match[1]);
