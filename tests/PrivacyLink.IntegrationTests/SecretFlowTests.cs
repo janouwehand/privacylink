@@ -66,46 +66,21 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
     }
 
     [Fact]
-    public async Task ChromeExtensionOriginIsDeniedWhenUnsetOrDifferentFromConfiguredId()
+    public async Task ChromeExtensionOriginIsAcceptedWithoutAnIdAllowlist()
     {
-        using var unsetFactory = new TestApiFactory().WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
+        using var client = new TestApiFactory().CreateClient();
+        foreach (var origin in new[] { TestChromeExtensionOrigin, "chrome-extension://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" })
         {
-            ["Security:ChromeExtensionOrigin"] = string.Empty
-        })));
-        using var unsetClient = unsetFactory.CreateClient();
-        using var unsetRequest = new HttpRequestMessage(HttpMethod.Get, "/api/v1/secrets/create-challenge");
-        unsetRequest.Headers.Add("Origin", TestChromeExtensionOrigin);
-        unsetRequest.Headers.Add("Sec-Fetch-Site", "cross-site");
-        using var unsetResponse = await unsetClient.SendAsync(unsetRequest);
-        Assert.Equal(HttpStatusCode.Forbidden, unsetResponse.StatusCode);
-        using var unsetCreateRequest = new HttpRequestMessage(HttpMethod.Post, "/api/v1/secrets");
-        unsetCreateRequest.Headers.Add("Origin", TestChromeExtensionOrigin);
-        unsetCreateRequest.Headers.Add("Sec-Fetch-Site", "cross-site");
-        using var unsetCreateResponse = await unsetClient.SendAsync(unsetCreateRequest);
-        Assert.Equal(HttpStatusCode.Forbidden, unsetCreateResponse.StatusCode);
-        using var unsetCapabilitiesRequest = new HttpRequestMessage(HttpMethod.Get, "/api/v1/capabilities");
-        unsetCapabilitiesRequest.Headers.Add("Origin", TestChromeExtensionOrigin);
-        using var unsetCapabilitiesResponse = await unsetClient.SendAsync(unsetCapabilitiesRequest);
-        Assert.Equal(HttpStatusCode.Forbidden, unsetCapabilitiesResponse.StatusCode);
-
-        using var configuredFactory = new TestApiFactory().WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["Security:ChromeExtensionOrigin"] = TestChromeExtensionOrigin
-        })));
-        using var configuredClient = configuredFactory.CreateClient();
-        using var otherIdRequest = new HttpRequestMessage(HttpMethod.Get, "/api/v1/secrets/create-challenge");
-        otherIdRequest.Headers.Add("Origin", "chrome-extension://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-        otherIdRequest.Headers.Add("Sec-Fetch-Site", "cross-site");
-        using var otherIdResponse = await configuredClient.SendAsync(otherIdRequest);
-        Assert.Equal(HttpStatusCode.Forbidden, otherIdResponse.StatusCode);
-        using var otherIdCapabilities = new HttpRequestMessage(HttpMethod.Get, "/api/v1/capabilities");
-        otherIdCapabilities.Headers.Add("Origin", "chrome-extension://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-        using var otherIdCapabilitiesResponse = await configuredClient.SendAsync(otherIdCapabilities);
-        Assert.Equal(HttpStatusCode.Forbidden, otherIdCapabilitiesResponse.StatusCode);
+            using var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/secrets/create-challenge");
+            request.Headers.Add("Origin", origin);
+            request.Headers.Add("Sec-Fetch-Site", "cross-site");
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
     }
 
     [Fact]
-    public async Task ChromeExtensionOriginCanReadCapabilitiesAndIsDeniedForOtherRoutesAndMethods()
+    public async Task ChromeExtensionOriginIsNotBlockedByOriginFilterOnOtherRoutesOrMethods()
     {
         using var factory = new TestApiFactory().WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -120,13 +95,13 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
 
         using var unrelatedRoute = new HttpRequestMessage(HttpMethod.Get, "/api/v1/stats");
         unrelatedRoute.Headers.Add("Origin", TestChromeExtensionOrigin);
-        using var rejectedRoute = await client.SendAsync(unrelatedRoute);
-        Assert.Equal(HttpStatusCode.Forbidden, rejectedRoute.StatusCode);
+        using var unrelatedResponse = await client.SendAsync(unrelatedRoute);
+        Assert.Equal(HttpStatusCode.Gone, unrelatedResponse.StatusCode);
 
         using var otherMethod = new HttpRequestMessage(HttpMethod.Put, "/api/v1/capabilities");
         otherMethod.Headers.Add("Origin", TestChromeExtensionOrigin);
-        using var rejectedMethod = await client.SendAsync(otherMethod);
-        Assert.Equal(HttpStatusCode.Forbidden, rejectedMethod.StatusCode);
+        using var otherMethodResponse = await client.SendAsync(otherMethod);
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, otherMethodResponse.StatusCode);
     }
 
     [Fact]

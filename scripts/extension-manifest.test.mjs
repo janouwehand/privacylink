@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const manifestPath = path.join(repositoryRoot, 'src', 'PrivacyLink.Web', 'extension', 'manifest.json');
 
-test('extension manifest scopes its popup and recipient script to PrivacyLink', async () => {
+test('extension manifest scopes its tab and recipient script to PrivacyLink', async () => {
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
 
   assert.equal(manifest.manifest_version, 3);
@@ -21,7 +21,7 @@ test('extension manifest scopes its popup and recipient script to PrivacyLink', 
     world: 'ISOLATED'
   }]);
   assert.equal(manifest.web_accessible_resources, undefined);
-  assert.equal(manifest.background, undefined);
-  assert.equal(manifest.action.default_popup, 'index.html');
+  assert.equal(manifest.action.default_popup, undefined);
+  assert.deepEqual(manifest.background, { service_worker: 'background.js' });
   assert.doesNotMatch(JSON.stringify(manifest), /<all_urls>|webNavigation|history|"tabs"/i);
 });

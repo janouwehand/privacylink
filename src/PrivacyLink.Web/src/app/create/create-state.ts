@@ -1,4 +1,4 @@
-import { computed, inject, Injectable, signal } from '@angular/core';
+import { computed, inject, Injectable, InjectionToken, signal } from '@angular/core';
 import { DOCUMENT } from '@angular/common';
 import { AppState } from '../app-state';
 import { LinkSharingState } from '../link-sharing-state';
@@ -12,6 +12,8 @@ import type { CreateChallenge } from '../../../../PrivacyLink.Client/src';
 import type { TranslatableError } from '../translations';
 
 type Expiry = '1d' | '7d' | '14d';
+export const PRIVACYLINK_SHARE_ORIGIN = new InjectionToken<string>('PRIVACYLINK_SHARE_ORIGIN', { providedIn: 'root', factory: () => '' });
+export const CREATE_HISTORY_ENABLED = new InjectionToken<boolean>('CREATE_HISTORY_ENABLED', { providedIn: 'root', factory: () => true });
 type FilePolicy = { maxFiles: number; maxTotalFileBytes: number; allowedFileExtensions: string[] };
 const MAX_MESSAGE_CHARACTERS = 20000;
 const MAX_MESSAGE_BYTES = MAX_MESSAGE_CHARACTERS * 4;
@@ -27,6 +29,8 @@ export class CreateState {
   private readonly sharing = inject(LinkSharingState);
   private readonly workProgress = inject(WorkProgressState);
   private readonly document = inject(DOCUMENT);
+  private readonly shareOrigin = inject(PRIVACYLINK_SHARE_ORIGIN);
+  private readonly historyEnabled = inject(CREATE_HISTORY_ENABLED);
   private linkCopiedTimeout: ReturnType<typeof setTimeout> | undefined;
   private passwordCopiedTimeout: ReturnType<typeof setTimeout> | undefined;
   private resultAccessCodeCopiedTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -374,7 +378,7 @@ export class CreateState {
     this.workProgress.begin('create', filesToEncrypt.map(file => file.name));
     try {
       this.historyWarning.set(null);
-      await this.history.whenReady();
+      if (this.historyEnabled) await this.history.whenReady();
       const encrypted = await encryptMessage(this.message());
       const clientKey = decodeCanonical(encrypted.clientKey, 32);
       const requestWithoutFiles = {
@@ -388,12 +392,12 @@ export class CreateState {
         ? await this.createFilesWithWorker(requestWithoutFiles, filesToEncrypt, clientKey)
         : await this.submitWithProof(proof => this.api.create({ ...requestWithoutFiles, files: [] }, proof));
       decodeCanonical(created.id, 16);
-      this.shareLink.set(`${this.document.location.origin}/s/${created.id}#${encrypted.clientKey}`);
+      this.shareLink.set(`${this.shareOrigin || this.document.location.origin}/s/${created.id}#${encrypted.clientKey}`);
       this.expiresAt.set(created.expiresAt);
       this.clearLinkCopiedFeedback();
       this.resultAccessCode.set(this.password());
       this.resultAccessCodeCopied.set(false);
-      if (!await this.history.add({
+      if (this.historyEnabled && !await this.history.add({
           id: created.id,
           createdAt: new Date().toISOString(),
           link: this.shareLink(),

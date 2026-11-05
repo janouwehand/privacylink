@@ -4,9 +4,11 @@
   "scripts": {
     "ng": "ng",
     "start": "ng serve privacy-link-web --proxy-config proxy.conf.json",
-    "build": "ng build privacy-link-web",
-    "build:extension": "ng build privacy-link-extension && npm run bundle:extension-recipient",
+    "build": "ng build privacy-link-web && node ../../scripts/write-ui-provenance.mjs dist/privacy-link-web/browser",
+    "build:extension": "ng build privacy-link-extension && npm run bundle:extension-recipient && npm run bundle:extension-background && node ../../scripts/write-ui-provenance.mjs dist/privacy-link-extension/browser",
+    "build:extension:local": "npm run build:extension && node ../../scripts/apply-local-extension-key.mjs dist/privacy-link-extension/browser/manifest.json extension/manifest.local.json",
     "bundle:extension-recipient": "esbuild extension/src/recipient-main.ts --bundle --format=iife --target=chrome120 --outfile=dist/privacy-link-extension/browser/recipient-content.js",
+    "bundle:extension-background": "esbuild extension/src/background.ts --bundle --format=iife --target=chrome120 --outfile=dist/privacy-link-extension/browser/background.js",
     "verify:extension": "node ../../scripts/verify-extension-package.mjs",
     "build:container": "powershell -NoProfile -File ../../scripts/build-web-container.ps1",
     "watch": "ng build privacy-link-web --watch --configuration development",

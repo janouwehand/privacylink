@@ -114,7 +114,6 @@ builder.Services.AddRateLimiter(options =>
 
 var app = builder.Build();
 ProductionConfiguration.Validate(app.Configuration, app.Environment.IsProduction());
-var configuredChromeExtensionOrigin = ChromeExtensionOrigin.Read(app.Configuration);
 app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
 {
     PrivacyAudit.Log(context, "unhandled_error");
@@ -179,19 +178,10 @@ app.Use(async (context, next) =>
     var isCapabilities = request.Path.Equals("/api/v1/capabilities", StringComparison.OrdinalIgnoreCase);
     var hasOrigin = request.Headers.TryGetValue("Origin", out var originHeader);
     var origin = hasOrigin ? originHeader.ToString() : null;
-    var isExtensionOrigin = origin is not null && ChromeExtensionOrigin.IsExtensionOrigin(origin);
+    var isExtensionOrigin = origin is not null && origin.StartsWith("chrome-extension://", StringComparison.OrdinalIgnoreCase);
 
     if (isExtensionOrigin)
     {
-        var allowedExtensionRequest = string.Equals(origin, configuredChromeExtensionOrigin, StringComparison.Ordinal) &&
-            (HttpMethods.IsGet(request.Method) && (isCreateChallenge || isCapabilities) || HttpMethods.IsPost(request.Method) && isCreate);
-        if (!allowedExtensionRequest)
-        {
-            context.Response.StatusCode = StatusCodes.Status403Forbidden;
-            await context.Response.WriteAsJsonAsync(new ErrorResponse("forbidden"), PrivacyLinkJsonContext.Default.ErrorResponse);
-            return;
-        }
-
         await next();
         return;
     }

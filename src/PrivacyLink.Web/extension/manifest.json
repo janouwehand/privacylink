@@ -15,7 +15,9 @@
     }
   ],
   "action": {
-    "default_title": "Create a PrivacyLink secret",
-    "default_popup": "index.html"
+    "default_title": "Create a PrivacyLink secret"
+  },
+  "background": {
+    "service_worker": "background.js"
   }
 }

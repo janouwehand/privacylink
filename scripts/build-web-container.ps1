@@ -19,4 +19,13 @@ if (-not (Test-Path (Join-Path $outputPath 'index.html')) -and -not (Test-Path (
     throw "Containerized Angular production build did not produce index.html."
 }
 
+$browserOutput = if (Test-Path (Join-Path $outputPath 'browser\index.html')) { Join-Path $outputPath 'browser' } else { $outputPath }
+Push-Location $webRoot
+try {
+    node ..\..\scripts\write-ui-provenance.mjs $browserOutput
+    if ($LASTEXITCODE -ne 0) { throw "Could not write website UI provenance (exit code $LASTEXITCODE)." }
+} finally {
+    Pop-Location
+}
+
 Write-Host "Angular production bundle written to $outputPath"

@@ -98,9 +98,7 @@
                 "output": "."
               }
             ],
-            "styles": [
-              "extension/styles.css"
-            ],
+            "styles": ["src/styles.css", "extension/adapters.css"],
             "outputPath": "dist/privacy-link-extension"
           },
           "configurations": {
