@@ -10,7 +10,7 @@ on:
         default: false
         type: boolean
       image_digest:
-        description: Optional existing GHCR digest to redeploy (for rollback); leave empty to build current main
+        description: Optional existing GHCR digest to redeploy (for rollback); leave empty to build the selected branch
         required: false
         type: string
 
@@ -20,7 +20,7 @@ permissions:
 jobs:
   validate:
     name: Validate release
-    if: github.ref == 'refs/heads/main'
+    if: github.ref_type == 'branch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -33,7 +33,7 @@ jobs:
             echo 'publish_only cannot be combined with image_digest.' >&2
             exit 64
           fi
-      - name: Check out selected main commit
+      - name: Check out selected branch commit
         uses: actions/checkout@v7
       - name: Install .NET SDK
         uses: actions/setup-dotnet@v6
@@ -58,7 +58,7 @@ jobs:
 
   publish:
     name: Build and publish immutable image
-    if: github.ref == 'refs/heads/main' && inputs.image_digest == ''
+    if: github.ref_type == 'branch' && inputs.image_digest == ''
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -69,7 +69,7 @@ jobs:
       image: ${{ steps.image.outputs.name }}
       digest: ${{ steps.build.outputs.digest }}
     steps:
-      - name: Check out selected main commit
+      - name: Check out selected branch commit
         uses: actions/checkout@v7
       - name: Set image name
         id: image
@@ -102,7 +102,7 @@ jobs:
 
   resolve-image:
     name: Select image digest
-    if: always() && github.ref == 'refs/heads/main' && needs.validate.result == 'success' && (inputs.image_digest != '' || needs.publish.result == 'success')
+    if: always() && github.ref_type == 'branch' && needs.validate.result == 'success' && (inputs.image_digest != '' || needs.publish.result == 'success')
     needs: [validate, publish]
     runs-on: ubuntu-latest
     outputs:
@@ -130,7 +130,7 @@ jobs:
 
   deploy-staging:
     name: Deploy and verify staging
-    if: github.ref == 'refs/heads/main' && inputs.publish_only != true
+    if: github.ref_type == 'branch' && inputs.publish_only != true
     needs: resolve-image
     runs-on: ubuntu-latest
     environment: staging

@@ -1,15 +1,29 @@
 import { DOCUMENT } from '@angular/common';
-import { inject, Injectable } from '@angular/core';
+import { inject, Injectable, InjectionToken } from '@angular/core';
+
+export interface LinkSharingAdapter {
+  copy(value: string): Promise<void>;
+  share(url: string): Promise<void>;
+}
+
+export const LINK_SHARING_ADAPTER = new InjectionToken<LinkSharingAdapter>('LINK_SHARING_ADAPTER', {
+  providedIn: 'root',
+  factory: () => ({
+    copy: value => navigator.clipboard.writeText(value),
+    share: async url => { if (typeof navigator.share === 'function') await navigator.share({ url }); }
+  })
+});
 
 @Injectable({ providedIn: 'root' })
 export class LinkSharingState {
   readonly canShare = typeof navigator.share === 'function';
 
   private readonly document = inject(DOCUMENT);
+  private readonly adapter = inject(LINK_SHARING_ADAPTER);
 
   async copy(value: string): Promise<boolean> {
     try {
-      await navigator.clipboard.writeText(value);
+      await this.adapter.copy(value);
       return true;
     } catch {
       return false;
@@ -17,7 +31,7 @@ export class LinkSharingState {
   }
 
   async share(url: string): Promise<void> {
-    try { await navigator.share({ url }); } catch { /* The user may cancel the native share sheet. */ }
+    try { await this.adapter.share(url); } catch { /* The user may cancel the native share sheet. */ }
   }
 
   openInNewTab(value: string): void {

@@ -1,0 +1,3 @@
+html[data-client="extension"] .header-tools > .history-nav-link {
+  display: none;
+}

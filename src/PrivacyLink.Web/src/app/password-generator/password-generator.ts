@@ -1,6 +1,7 @@
 import { Component, EventEmitter, Input, Output, computed, inject, signal } from '@angular/core';
 import { LinkSharingState } from '../link-sharing-state';
-import { LanguageState } from '../language-state';
+import { LANGUAGE_STORAGE_ADAPTER, LanguageState } from '../language-state';
+import type { LanguageStorageAdapter } from '../language-state';
 
 type GeneratorType = 'password' | 'pin';
 type GeneratorSettings = {
@@ -22,9 +23,9 @@ const DEFAULT_SETTINGS: GeneratorSettings = {
   excludeAmbiguous: true
 };
 
-function loadSettings(): GeneratorSettings {
+function loadSettings(storage: LanguageStorageAdapter): GeneratorSettings {
   try {
-    const stored: unknown = JSON.parse(globalThis.localStorage.getItem(SETTINGS_KEY) ?? 'null');
+    const stored: unknown = JSON.parse(storage.get(SETTINGS_KEY) ?? 'null');
     if (!stored || typeof stored !== 'object') return { ...DEFAULT_SETTINGS };
     const settings = stored as Partial<GeneratorSettings>;
     return {
@@ -64,10 +65,11 @@ export class PasswordGenerator {
   @Output() readonly close = new EventEmitter<void>();
 
   protected readonly language = inject(LanguageState);
+  private readonly storage = inject(LANGUAGE_STORAGE_ADAPTER);
   private readonly sharing = inject(LinkSharingState);
   private copiedTimeout: ReturnType<typeof setTimeout> | undefined;
 
-  private readonly initialSettings = loadSettings();
+  private readonly initialSettings = loadSettings(this.storage);
   readonly type = signal<GeneratorType>(this.initialSettings.type);
   readonly pinLength = signal(this.initialSettings.pinLength);
   readonly passwordLength = signal(this.initialSettings.passwordLength);
@@ -151,7 +153,7 @@ export class PasswordGenerator {
         symbols: this.symbols(),
         excludeAmbiguous: this.excludeAmbiguous()
       };
-      globalThis.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+      this.storage.set(SETTINGS_KEY, JSON.stringify(settings));
     } catch {
       // Keep the generator usable when browser storage is unavailable.
     }

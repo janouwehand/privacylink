@@ -1,14 +1,24 @@
 import { DOCUMENT, registerLocaleData } from '@angular/common';
 import localeNl from '@angular/common/locales/nl';
-import { inject, Injectable, signal } from '@angular/core';
+import { inject, Injectable, InjectionToken, signal } from '@angular/core';
 import { translate } from './translations';
 import type { Language, TranslationArguments, TranslationKey, TranslatableError } from './translations';
 
 const LANGUAGE_STORAGE_KEY = 'privacylink.language';
 
-function initialLanguage(): Language {
+export interface LanguageStorageAdapter {
+  get(key: string): string | null;
+  set(key: string, value: string): void;
+}
+
+export const LANGUAGE_STORAGE_ADAPTER = new InjectionToken<LanguageStorageAdapter>('LANGUAGE_STORAGE_ADAPTER', {
+  providedIn: 'root',
+  factory: () => ({ get: key => globalThis.localStorage.getItem(key), set: (key, value) => globalThis.localStorage.setItem(key, value) })
+});
+
+function initialLanguage(storage: LanguageStorageAdapter): Language {
   try {
-    const stored = globalThis.localStorage.getItem(LANGUAGE_STORAGE_KEY);
+    const stored = storage.get(LANGUAGE_STORAGE_KEY);
     if (stored === 'nl' || stored === 'en') return stored;
   } catch { /* Fall back to the browser language when storage is unavailable. */ }
   return navigator.language.toLowerCase().startsWith('nl') ? 'nl' : 'en';
@@ -18,7 +28,8 @@ registerLocaleData(localeNl);
 
 @Injectable({ providedIn: 'root' })
 export class LanguageState {
-  readonly lang = signal<Language>(initialLanguage());
+  private readonly storage = inject(LANGUAGE_STORAGE_ADAPTER);
+  readonly lang = signal<Language>(initialLanguage(this.storage));
   readonly dateLocale = () => this.lang() === 'nl' ? 'nl' : 'en-US';
 
   private readonly document = inject(DOCUMENT);
@@ -34,7 +45,7 @@ export class LanguageState {
   setLanguage(lang: Language): void {
     this.lang.set(lang);
     this.document.documentElement.lang = lang;
-    try { globalThis.localStorage.setItem(LANGUAGE_STORAGE_KEY, lang); } catch { /* Keep the selected language for this page. */ }
+    try { this.storage.set(LANGUAGE_STORAGE_KEY, lang); } catch { /* Keep the selected language for this page. */ }
   }
 
   formatNumber(value: number, maximumFractionDigits?: number): string {

@@ -24,21 +24,29 @@ assert.deepEqual(manifest.content_scripts, [{
   all_frames: false,
   world: 'ISOLATED'
 }], 'recipient handling must run only in the top frame of PrivacyLink share routes');
-assert.equal(manifest.action.default_popup, 'index.html');
-assert.equal(manifest.background, undefined, 'recipient handoff must not require a background worker');
+assert.equal(manifest.action.default_popup, undefined, 'toolbar action must open a persistent extension tab');
+assert.deepEqual(manifest.background, { service_worker: 'background.js' });
 assert.equal(manifest.web_accessible_resources, undefined, 'website pages must not load extension resources directly');
 assert.ok(await readFile(path.join(packageRoot, 'recipient-content.js')), 'packaged recipient content script must exist');
 
-const html = await readFile(path.join(packageRoot, manifest.action.default_popup), 'utf8');
+assert.ok(await readFile(path.join(packageRoot, manifest.background.service_worker)), 'packaged background service worker must exist');
+const html = await readFile(path.join(packageRoot, 'index.html'), 'utf8');
 const executableFiles = [...html.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi)].map(match => match[1]);
-assert.ok(executableFiles.length > 0, 'popup must load its packaged executable bundle');
+assert.ok(executableFiles.length > 0, 'extension page must load its packaged executable bundle');
 for (const source of executableFiles) {
-  assert.ok(!/^(?:https?:)?\/\//i.test(source), `popup script must be local: ${source}`);
-  assert.ok(await readFile(path.join(packageRoot, source)), `popup script must exist in package: ${source}`);
+  assert.ok(!/^(?:https?:)?\/\//i.test(source), `extension page script must be local: ${source}`);
+  assert.ok(await readFile(path.join(packageRoot, source)), `extension page script must exist in package: ${source}`);
 }
-assert.doesNotMatch(html, /<script\b[^>]*>\s*[^<]/i, 'popup must not contain inline executable code');
+assert.doesNotMatch(html, /<script\b[^>]*>\s*[^<]/i, 'extension page must not contain inline executable code');
 
 const files = await readdir(packageRoot, { recursive: true });
 assert.ok(files.some(file => file.endsWith('.js')), 'compiled JavaScript must ship with the extension');
-assert.ok(files.some(file => file.endsWith('.css')), 'popup stylesheet must ship with the extension');
+assert.ok(files.some(file => file.endsWith('.css')), 'extension page stylesheet must ship with the extension');
 console.log('Extension package verified: local executable bundle and restricted manifest permissions.');
+const provenance = JSON.parse(await readFile(path.join(packageRoot, 'ui-provenance.json'), 'utf8'));
+assert.match(provenance.sourceRevision, /^[0-9a-f]{40}$/i, 'package must record its source revision');
+assert.match(provenance.sharedUiVersion, /^sha256:[0-9a-f]{64}$/i, 'package must record the shared UI content version');
+assert.equal(typeof provenance.sourceDirty, 'boolean', 'package must say whether its source tree was dirty');
+assert.match(provenance.sourceTreeHash, /^sha256:[0-9a-f]{64}$/i, 'package must identify the complete source tree');
+assert.ok(Array.isArray(provenance.dirtyPaths), 'package must list source changes when present');
+assert.equal(provenance.sourceDirty, provenance.dirtyPaths.length > 0, 'dirty state must agree with the recorded changed paths');

@@ -87,6 +87,24 @@ describe('SecretApi unlock retries', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/secrets/create-challenge', expect.objectContaining({ cache: 'no-store' }));
   });
 
+  it('keeps existing API contracts while resolving them against an extension API origin', async () => {
+    const created = { id: 'AAAAAAAAAAAAAAAAAAAAAA', expiresAt: '2030-01-01T00:00:00.000Z', passwordProtected: false, revokeToken: 'revoke' };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ maxFiles: 5, maxTotalFileBytes: 1000, allowedFileExtensions: ['.txt'] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(created), { status: 201 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const api = new SecretApi('https://privacylink.nl');
+    const request = { protocolVersion: 1 as const, expiry: '7d' as const, message: null, files: [] };
+
+    await api.getFileUploadPolicy();
+    await expect(api.create(request, 'proof')).resolves.toEqual(created);
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://privacylink.nl/api/v1/capabilities');
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('https://privacylink.nl/api/v1/secrets');
+    expect(JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string)).toEqual(request);
+    expect(fetchMock.mock.calls[1]?.[1]?.headers).toEqual({ 'Content-Type': 'application/json', 'X-PrivacyLink-Proof': 'proof' });
+  });
+
   it('requests an email code only through the explicit verification endpoint', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: 'verification_requested' }), { status: 202 }));
     vi.stubGlobal('fetch', fetchMock);
