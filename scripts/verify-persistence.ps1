@@ -33,7 +33,7 @@ function Get-OpenProof([string] $BaseUrl, [string] $SecretId) {
     $challenge = Invoke-RestMethod "$BaseUrl/api/v1/secrets/$SecretId/open-challenge" -Method Get
     $counter = [UInt64]0
     do {
-        $proofText = "PrivacyLink-Open-PoW-v1:$($challenge.challengeId):$SecretId:open:$($challenge.nonce):$counter"
+        $proofText = "PrivacyLink-Open-PoW-v1:$($challenge.challengeId):${SecretId}:open:$($challenge.nonce):$counter"
         $digest = [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($proofText))
         $counter++
         $zeroBits = 0
