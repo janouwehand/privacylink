@@ -14,6 +14,7 @@ $oldBlobPath = $env:Storage__BlobPath
 $oldEnvironment = $env:ASPNETCORE_ENVIRONMENT
 $oldCreateProofKey = $env:Security__CreateProofHmacKey
 $oldCreateProofDifficulty = $env:Security__CreateProofDifficultyBits
+$oldOpenProofDifficulty = $env:Security__OpenProofDifficultyBits
 
 function Invoke-Docker([string[]] $Arguments) {
     & docker @Arguments
@@ -26,6 +27,23 @@ function Stop-ApiProcessTree($Process) {
         catch { Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue }
         $Process.WaitForExit()
     }
+}
+
+function Get-OpenProof([string] $BaseUrl, [string] $SecretId) {
+    $challenge = Invoke-RestMethod "$BaseUrl/api/v1/secrets/$SecretId/open-challenge" -Method Get
+    $counter = [UInt64]0
+    do {
+        $proofText = "PrivacyLink-Open-PoW-v1:$($challenge.challengeId):${SecretId}:open:$($challenge.nonce):$counter"
+        $digest = [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($proofText))
+        $counter++
+        $zeroBits = 0
+        foreach ($value in $digest) {
+            if ($value -eq 0) { $zeroBits += 8; continue }
+            $zeroBits += [System.Numerics.BitOperations]::LeadingZeroCount([uint32]$value) - 24
+            break
+        }
+    } while ($zeroBits -lt $challenge.difficultyBits)
+    return "$($challenge.challengeId).$($challenge.nonce).$($challenge.difficultyBits).$($challenge.expiresAt).$($challenge.signature).$($counter - 1)"
 }
 
 try {
@@ -47,6 +65,7 @@ try {
     $env:ASPNETCORE_ENVIRONMENT = 'Development'
     $env:Security__CreateProofHmacKey = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
     $env:Security__CreateProofDifficultyBits = '1'
+    $env:Security__OpenProofDifficultyBits = '1'
     $apiLog = Join-Path $runRoot 'api.log'
     $apiErrorLog = Join-Path $runRoot 'api-error.log'
     $apiProcess = Start-Process dotnet -ArgumentList 'run --project src/PrivacyLink.Api/PrivacyLink.Api.csproj --no-launch-profile --urls http://127.0.0.1:5089' -WorkingDirectory $repoRoot -RedirectStandardOutput $apiLog -RedirectStandardError $apiErrorLog -WindowStyle Hidden -PassThru
@@ -105,6 +124,7 @@ try {
         for ($index = 0; $index -lt 8; $index++) {
             $port = if ($index % 2 -eq 0) { 5089 } else { 5090 }
             $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Post, "http://127.0.0.1:$port/api/v1/secrets/$($created.id)/open")
+            $request.Headers.Add('X-PrivacyLink-Proof', (Get-OpenProof "http://127.0.0.1:$port" $created.id))
             $openTasks.Add($httpClient.SendAsync($request))
         }
         $openResponses = $openTasks.ToArray()
@@ -146,6 +166,7 @@ try {
         $restartedMetadata = Invoke-RestMethod "http://127.0.0.1:5089/api/v1/secrets/$($consumedFixture.id)" -Method Get
         if (-not $restartedMetadata.oneTimeOpened) { throw 'The one-time-open claim was lost after restarting the API.' }
         $restartedOpenRequest = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Post, "http://127.0.0.1:5089/api/v1/secrets/$($consumedFixture.id)/open")
+        $restartedOpenRequest.Headers.Add('X-PrivacyLink-Proof', (Get-OpenProof 'http://127.0.0.1:5089' $consumedFixture.id))
         $restartedOpenResponse = $httpClient.SendAsync($restartedOpenRequest).GetAwaiter().GetResult()
         if ($restartedOpenResponse.StatusCode -ne [System.Net.HttpStatusCode]::NotFound) {
             throw "The restarted API allowed a second open after the durable claim; got HTTP $([int]$restartedOpenResponse.StatusCode)."
@@ -188,5 +209,6 @@ finally {
     $env:ASPNETCORE_ENVIRONMENT = $oldEnvironment
     $env:Security__CreateProofHmacKey = $oldCreateProofKey
     $env:Security__CreateProofDifficultyBits = $oldCreateProofDifficulty
+    $env:Security__OpenProofDifficultyBits = $oldOpenProofDifficulty
     if (Test-Path $runRoot) { Remove-Item -LiteralPath $runRoot -Recurse -Force }
 }

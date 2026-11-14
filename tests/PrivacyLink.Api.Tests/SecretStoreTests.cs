@@ -14,6 +14,7 @@ public sealed class SecretStoreTests
         {
             ["Security:CreateProofHmacKey"] = Convert.ToBase64String(new byte[32]),
             ["Security:CreateProofDifficultyBits"] = "17",
+            ["Security:OpenProofDifficultyBits"] = "17",
             ["Security:PasswordPepper"] = "pepper",
             ["Security:SecretStore:Provider"] = "Environment",
             ["Security:RequirePasswordPepper"] = "true",
@@ -35,12 +36,31 @@ public sealed class SecretStoreTests
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Security:CreateProofHmacKey"] = Convert.ToBase64String(new byte[32]),
-            ["Security:CreateProofDifficultyBits"] = difficulty
+            ["Security:CreateProofDifficultyBits"] = difficulty,
+            ["Security:OpenProofDifficultyBits"] = "17"
         }).Build();
 
         var error = Assert.Throws<InvalidOperationException>(() => ProductionConfiguration.Validate(configuration, isProduction: false));
 
         Assert.Contains("CreateProofDifficultyBits", error.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("25")]
+    [InlineData("20.0")]
+    public void ProductionConfigurationRejectsInvalidOpenProofDifficulty(string difficulty)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Security:CreateProofHmacKey"] = Convert.ToBase64String(new byte[32]),
+            ["Security:CreateProofDifficultyBits"] = "17",
+            ["Security:OpenProofDifficultyBits"] = difficulty
+        }).Build();
+
+        var error = Assert.Throws<InvalidOperationException>(() => ProductionConfiguration.Validate(configuration, isProduction: false));
+
+        Assert.Contains("OpenProofDifficultyBits", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -50,6 +70,7 @@ public sealed class SecretStoreTests
         {
             ["Security:CreateProofHmacKey"] = Convert.ToBase64String(new byte[32]),
             ["Security:CreateProofDifficultyBits"] = "17",
+            ["Security:OpenProofDifficultyBits"] = "17",
             ["Security:PasswordPepper"] = "pepper",
             ["Security:RequirePasswordPepper"] = "true",
             ["Security:RequireHttps"] = "true",

@@ -30,6 +30,9 @@ function makeFetch(responses: (path: string, init?: RequestInit) => Response | P
     const url = String(input);
     const path = new URL(url, 'https://privacylink.nl').pathname;
     requests.push({ url, path, init });
+    if (/^\/api\/v1\/secrets\/[A-Za-z0-9_-]{22}\/(?:open|unlock)-challenge$/.test(path)) {
+      return new Response(JSON.stringify({ version: 1, challengeId: 'AAAAAAAAAAAAAAAAAAAAAA', nonce: 'BBBBBBBBBBBBBBBBBBBBBB', difficultyBits: 1, expiresAt: Math.floor(Date.now() / 1000) + 300, signature: 'test-signature' }), { status: 200 });
+    }
     return responses(path, init);
   });
   return { fetcher, requests };
@@ -81,7 +84,7 @@ describe('PrivacyLink extension recipient flow', () => {
 
     expect(controller!.snapshot()).toMatchObject({ phase: 'opened', openedMessage: 'Extension recipient text' });
     expect(cleared).toEqual([`/s/${id}`]);
-    expect(requests.map(request => request.path)).toEqual([`/api/v1/secrets/${id}`, `/api/v1/secrets/${id}/open`]);
+    expect(requests.map(request => request.path)).toEqual([`/api/v1/secrets/${id}`, `/api/v1/secrets/${id}/open-challenge`, `/api/v1/secrets/${id}/open`]);
     expect(requests.every(request => new URL(request.url).origin === 'https://privacylink.nl')).toBe(true);
     expect(requests.every(request => request.init?.credentials === 'same-origin')).toBe(true);
     expect(JSON.stringify(requests)).not.toContain(encrypted.clientKey);
@@ -278,6 +281,7 @@ describe('PrivacyLink extension recipient flow', () => {
     await controller!.open('reader password');
     const unlockRequest = requests.filter(request => request.path.endsWith('/unlock')).at(-1)!;
     expect(unlocks).toBe(2);
+    expect(unlockRequest.init?.headers).toEqual(expect.objectContaining({ 'X-PrivacyLink-Proof': expect.any(String) }));
     expect(JSON.parse(String(unlockRequest.init?.body))).toEqual({ password: await derivePasswordToken('reader password', encrypted.clientKey) });
     expect(JSON.stringify(requests)).not.toContain(encrypted.clientKey);
     expect(controller!.snapshot()).toMatchObject({ phase: 'opened', openedMessage: 'Protected extension text' });
@@ -309,7 +313,7 @@ describe('PrivacyLink extension recipient flow', () => {
     await controller!.download(file.id);
 
     expect(downloads).toEqual([{ name: 'notes.txt', bytes: 'private file bytes' }]);
-    expect(requests.map(request => request.path)).toEqual([`/api/v1/secrets/${id}`, `/api/v1/secrets/${id}/open`]);
+    expect(requests.map(request => request.path)).toEqual([`/api/v1/secrets/${id}`, `/api/v1/secrets/${id}/open-challenge`, `/api/v1/secrets/${id}/open`]);
     const beforeUnload = new Event('beforeunload', { cancelable: true });
     document.defaultView!.dispatchEvent(beforeUnload);
     expect(beforeUnload.defaultPrevented).toBe(true);

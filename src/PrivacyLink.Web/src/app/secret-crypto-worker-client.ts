@@ -13,7 +13,7 @@ export interface DecryptedFileResult { filename: string; mimeType: string; data:
 export interface DecryptedSecretFile { id: string; extension: string; name: string; mimeType: string; size: number }
 export interface DecryptedSecretResponse { token: string; message: string | null; files: DecryptedSecretFile[] }
 
-type Operation = 'encryptFile' | 'decryptFile' | 'decryptFileName' | 'serializeCreateRequest' | 'encryptFilesAndSerialize' | 'decryptOpenFileResponse' | 'decryptOpenSecretResponse' | 'decryptCachedFile' | 'clearCachedFiles' | 'solveCreateProof' | 'cancelProof';
+type Operation = 'encryptFile' | 'decryptFile' | 'decryptFileName' | 'serializeCreateRequest' | 'encryptFilesAndSerialize' | 'decryptOpenFileResponse' | 'decryptOpenSecretResponse' | 'decryptCachedFile' | 'clearCachedFiles' | 'solveCreateProof' | 'solveOpenProof' | 'cancelProof';
 interface RequestMessage {
   id: number;
   operation: Operation;
@@ -96,6 +96,10 @@ export class SecretCryptoWorkerClient {
 
   solveCreateProof(challenge: { challengeId: string; nonce: string; difficultyBits: number }, signal?: AbortSignal): Promise<string> {
     return this.request<string>('solveCreateProof', challenge, '', undefined, undefined, [], signal);
+  }
+
+  solveOpenProof(challenge: { version: number; challengeId: string; nonce: string; difficultyBits: number; expiresAt: number; signature: string }, secretId: string, action: 'open' | 'unlock' | `file-open:${string}`, signal?: AbortSignal): Promise<string> {
+    return this.request<string>('solveOpenProof', { challenge, secretId, action }, '', undefined, undefined, [], signal);
   }
 
   dispose(): void {

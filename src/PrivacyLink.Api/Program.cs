@@ -60,6 +60,7 @@ builder.Services.AddSingleton(sp => new PasswordEnvelopeService(new PasswordEnve
 builder.Services.AddSingleton<SecretApplicationService>();
 builder.Services.AddSingleton<EmailVerificationService>();
 builder.Services.AddSingleton<CreateProofOfWork>();
+builder.Services.AddSingleton<OpenProofOfWork>();
 builder.Services.AddTransient<SecretRequestAuditMiddleware>();
 builder.Services.AddPrivacyLinkInfrastructure(builder.Configuration);
 builder.Services.AddRateLimiter(options =>
@@ -69,6 +70,7 @@ builder.Services.AddRateLimiter(options =>
     var challengePerHour = Math.Max(20L, (long)createPerHour * 2);
     var challengePerDay = Math.Max(400L, (long)createPerDay * 4);
     var openPerMinute = int.TryParse(builder.Configuration["RateLimiting:OpenPerIpPerMinute"], out var minute) && minute > 0 ? minute : 30;
+    var openChallengePerMinute = int.TryParse(builder.Configuration["RateLimiting:OpenChallengePerIpPerMinute"], out var challengeMinute) && challengeMinute > 0 ? challengeMinute : 60;
     // Legacy PerSecret keys remain accepted; when both names are configured, the legacy key wins.
     var unlockPerMinute = PositiveLimit(builder.Configuration, 5, "RateLimiting:UnlockPerIpPerSecretPerMinute", "RateLimiting:UnlockPerIpPerMinute");
     var unlockPerHour = PositiveLimit(builder.Configuration, 20, "RateLimiting:UnlockPerIpPerSecretPerHour", "RateLimiting:UnlockPerIpPerHour");
@@ -97,6 +99,9 @@ builder.Services.AddRateLimiter(options =>
     options.AddPolicy("open", context => RateLimitPartition.GetFixedWindowLimiter(
         PrivacyAudit.ClientAddress(context),
         _ => new FixedWindowRateLimiterOptions { PermitLimit = openPerMinute, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+    options.AddPolicy("open-challenge", context => RateLimitPartition.GetFixedWindowLimiter(
+        PrivacyAudit.ClientAddress(context),
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = openChallengePerMinute, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
     // Do not include the route ID here: middleware runs before endpoint validation,
     // so attacker-controlled IDs would allocate an unbounded number of partitions.
     options.AddPolicy("unlock", context => RateLimitPartition.Get(PrivacyAudit.ClientAddress(context), _ =>
@@ -175,6 +180,7 @@ app.Use(async (context, next) =>
     var request = context.Request;
     var isCreate = request.Path.Equals("/api/v1/secrets", StringComparison.OrdinalIgnoreCase);
     var isCreateChallenge = request.Path.Equals("/api/v1/secrets/create-challenge", StringComparison.OrdinalIgnoreCase);
+    var isOpenChallenge = HttpMethods.IsGet(request.Method) && request.Path.Value?.Contains("-challenge", StringComparison.OrdinalIgnoreCase) == true;
     var isCapabilities = request.Path.Equals("/api/v1/capabilities", StringComparison.OrdinalIgnoreCase);
     var hasOrigin = request.Headers.TryGetValue("Origin", out var originHeader);
     var origin = hasOrigin ? originHeader.ToString() : null;
@@ -192,7 +198,7 @@ app.Use(async (context, next) =>
         string.Equals(site.ToString(), "cross-site", StringComparison.OrdinalIgnoreCase);
     var rejectPost = HttpMethods.IsPost(request.Method) &&
         (hasOrigin && !isSameOrigin || isCrossSite);
-    var rejectChallenge = HttpMethods.IsGet(request.Method) && isCreateChallenge &&
+    var rejectChallenge = HttpMethods.IsGet(request.Method) && (isCreateChallenge || isOpenChallenge) &&
         (hasOrigin && !isSameOrigin || isCrossSite);
     if (rejectPost || rejectChallenge)
     {
@@ -216,6 +222,9 @@ app.MapGet("/health/ready", async (IStorageReadiness health, HttpContext context
         : Results.Json(new ErrorResponse("not_ready"), PrivacyLinkJsonContext.Default.ErrorResponse, statusCode: StatusCodes.Status503ServiceUnavailable));
 app.MapGet("/api/v1/capabilities", (IConfiguration configuration) => SecretEndpoints.Capabilities(configuration));
 app.MapGet("/api/v1/secrets/create-challenge", (CreateProofOfWork proof) => SecretEndpoints.CreateChallenge(proof)).RequireRateLimiting("create-challenge");
+app.MapGet("/api/v1/secrets/{id}/open-challenge", (string id, OpenProofOfWork proof) => SecretEndpoints.OpenChallenge(id, "open", proof)).RequireRateLimiting("open-challenge");
+app.MapGet("/api/v1/secrets/{id}/unlock-challenge", (string id, OpenProofOfWork proof) => SecretEndpoints.OpenChallenge(id, "unlock", proof)).RequireRateLimiting("open-challenge");
+app.MapGet("/api/v1/secrets/{id}/files/{fileId}/open-challenge", (string id, string fileId, OpenProofOfWork proof) => SecretEndpoints.OpenFileChallenge(id, fileId, proof)).RequireRateLimiting("open-challenge");
 app.MapGet("/api/v1/stats", () => Results.Json(new ErrorResponse("statistics_retired"), PrivacyLinkJsonContext.Default.ErrorResponse, statusCode: StatusCodes.Status410Gone));
 var adminApi = app.MapGroup("/api/v1/admin");
 adminApi.MapPost("/login", (Delegate)AdminEndpoints.Login).RequireRateLimiting("admin-login");
@@ -227,9 +236,9 @@ app.MapGet("/api/v1/secrets/{id}", (string id, SecretApplicationService service,
 app.MapPost("/api/v1/secrets/{id}/email-verification/request", (string id, HttpRequest request, EmailVerificationService verification) => SecretEndpoints.RequestEmailCode(id, request, verification)).WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(1024));
 app.MapPost("/api/v1/secrets/{id}/email-verification/verify", (string id, HttpRequest request, EmailVerificationService verification, TimeProvider clock, IWebHostEnvironment environment) => SecretEndpoints.VerifyEmailCode(id, request, verification, clock, environment)).WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(2048));
 app.MapPost("/api/v1/secrets/{id}/revoke", (string id, HttpRequest request, SecretApplicationService service, ILoggerFactory loggerFactory) => SecretEndpoints.Revoke(id, request, service, loggerFactory)).RequireRateLimiting("revoke");
-app.MapPost("/api/v1/secrets/{id}/open", (string id, HttpRequest request, SecretApplicationService service, TimeProvider clock, EmailVerificationService verification, IWebHostEnvironment environment, ILoggerFactory loggerFactory) => SecretEndpoints.Open(id, request, service, clock, verification, environment, loggerFactory)).RequireRateLimiting("open");
-app.MapPost("/api/v1/secrets/{id}/unlock", (string id, HttpRequest request, SecretApplicationService service, TimeProvider clock, IConfiguration configuration, EmailVerificationService verification, IWebHostEnvironment environment, ILoggerFactory loggerFactory) => SecretEndpoints.Unlock(id, request, service, clock, configuration, verification, environment, loggerFactory)).RequireRateLimiting("unlock");
-app.MapPost("/api/v1/secrets/{id}/files/{fileId}/open", (string id, string fileId, HttpRequest request, SecretApplicationService service, TimeProvider clock, EmailVerificationService verification, IWebHostEnvironment environment) => SecretEndpoints.OpenFile(id, fileId, request, service, clock, verification, environment)).RequireRateLimiting("open");
+app.MapPost("/api/v1/secrets/{id}/open", (string id, HttpRequest request, OpenProofOfWork proof, SecretApplicationService service, TimeProvider clock, EmailVerificationService verification, IWebHostEnvironment environment, ILoggerFactory loggerFactory) => SecretEndpoints.Open(id, request, proof, service, clock, verification, environment, loggerFactory)).RequireRateLimiting("open");
+app.MapPost("/api/v1/secrets/{id}/unlock", (string id, HttpRequest request, OpenProofOfWork proof, SecretApplicationService service, TimeProvider clock, IConfiguration configuration, EmailVerificationService verification, IWebHostEnvironment environment, ILoggerFactory loggerFactory) => SecretEndpoints.Unlock(id, request, proof, service, clock, configuration, verification, environment, loggerFactory)).RequireRateLimiting("unlock");
+app.MapPost("/api/v1/secrets/{id}/files/{fileId}/open", (string id, string fileId, HttpRequest request, OpenProofOfWork proof, SecretApplicationService service, TimeProvider clock, EmailVerificationService verification, IWebHostEnvironment environment) => SecretEndpoints.OpenFile(id, fileId, request, proof, service, clock, verification, environment)).RequireRateLimiting("open");
 app.MapFallbackToFile("index.html");
 
 app.Run();

@@ -44,8 +44,22 @@ export class RecipientState {
   private recipientKey = '';
   private cachedFilesToken: string | undefined;
   private metadataRequestId = 0;
+  private openProofAction: 'open' | 'unlock' | undefined;
+  private preparedOpenProof: { action: 'open' | 'unlock'; header: string; deadline: number } | undefined;
+  private openProofTask: Promise<void> | undefined;
+  private openProofController: AbortController | undefined;
+  private visibilityListenerAttached = false;
   private lockoutTimer: ReturnType<typeof setInterval> | undefined;
   private emailCodeCooldownTimer: ReturnType<typeof setInterval> | undefined;
+
+  private readonly handleVisibilityChange = (): void => {
+    if (this.document.hidden) {
+      if (!this.busy()) this.openProofController?.abort();
+      return;
+    }
+    if (this.metadataReady() && !this.opened() && !this.busy() && this.openProofAction)
+      void this.prepareOpenProof().catch(() => {});
+  };
 
   setError(error: TranslatableError): void { this.error.set([error]); }
   clearError(): void { this.error.set([]); }
@@ -55,6 +69,10 @@ export class RecipientState {
   initialize(id: string | null, key: string): void {
     const requestId = ++this.metadataRequestId;
     this.clearRecipientData();
+    if (!this.visibilityListenerAttached) {
+      this.document.addEventListener('visibilitychange', this.handleVisibilityChange);
+      this.visibilityListenerAttached = true;
+    }
     this.clearError();
     if (!id) { this.setUnavailable(); return; }
     try {
@@ -75,6 +93,9 @@ export class RecipientState {
         return;
       }
       if (metadata.oneTimeOpened) { this.setUnavailable(); return; }
+      this.passwordProtected.set(metadata.passwordProtected);
+      this.openProofAction = metadata.passwordProtected ? 'unlock' : 'open';
+      if (!this.document.hidden) void this.prepareOpenProof().catch(() => {});
       let files: { id: string; name: string; extension: string; mimeType: string; size: number }[] = [];
       if (!metadata.passwordProtected && metadata.files.length) {
         this.workProgress.begin('open', metadata.files.map((_, index) => this.language.t('workFileNumber', { number: index + 1 })));
@@ -90,7 +111,6 @@ export class RecipientState {
         }
       }
       if (requestId !== this.metadataRequestId) return;
-      this.passwordProtected.set(metadata.passwordProtected);
       this.oneTimeOpen.set(metadata.oneTimeOpen === true);
       const emailVerificationRequired = metadata.emailVerificationRequired === true;
       this.emailVerificationRequired.set(emailVerificationRequired);
@@ -114,6 +134,9 @@ export class RecipientState {
 
   leave(): void {
     this.metadataRequestId++;
+    this.document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+    this.visibilityListenerAttached = false;
+    this.cancelOpenProofPreparation();
     this.workProgress.finish();
     this.clearLockout();
     this.clearRecipientData();
@@ -126,6 +149,8 @@ export class RecipientState {
     this.clearEmailCodeCooldown();
     this.recipientId = '';
     this.recipientKey = '';
+    this.cancelOpenProofPreparation();
+    this.openProofAction = undefined;
     this.unlockPassword.set('');
     this.metadataReady.set(false);
     this.loadingMetadata.set(false);
@@ -145,21 +170,88 @@ export class RecipientState {
     this.busy.set(false);
   }
 
+  private async prepareOpenProof(force = false): Promise<void> {
+    const action = this.openProofAction;
+    if (!action || !this.recipientId || this.document.hidden || this.opened()) return;
+    if (!force && this.preparedOpenProof?.action === action && this.preparedOpenProof.deadline > performance.now() + 5_000) return;
+    if (this.openProofTask && this.openProofAction === action && !this.openProofController?.signal.aborted) return this.openProofTask;
+    this.openProofTask = undefined;
+    this.openProofController?.abort();
+    this.preparedOpenProof = undefined;
+    const controller = new AbortController();
+    this.openProofController = controller;
+    const secretId = this.recipientId;
+    const challengeStartedAt = performance.now();
+    let task!: Promise<void>;
+    task = (async () => {
+      try {
+        const header = await this.api.getOpenProof(secretId, action, undefined, controller.signal);
+        if (controller.signal.aborted || secretId !== this.recipientId || action !== this.openProofAction) return;
+        this.preparedOpenProof = { action, header, deadline: challengeStartedAt + 295_000 };
+      } finally {
+        if (this.openProofController === controller) this.openProofController = undefined;
+        if (this.openProofTask === task) this.openProofTask = undefined;
+      }
+    })();
+    this.openProofTask = task;
+    return task;
+  }
+
+  private async takeOpenProof(): Promise<string> {
+    const action = this.openProofAction;
+    if (!action) throw new Error('Open proof is unavailable');
+    const usable = (): boolean => this.preparedOpenProof?.action === action && this.preparedOpenProof.deadline > performance.now() + 5_000;
+    if (usable()) {
+      const proof = this.preparedOpenProof!.header;
+      this.preparedOpenProof = undefined;
+      return proof;
+    }
+    this.preparedOpenProof = undefined;
+    if (!this.openProofTask) void this.prepareOpenProof(true);
+    const pending = this.openProofTask;
+    if (!pending) throw new Error('Open proof is unavailable');
+    try { await pending; }
+    catch {
+      if (this.document.hidden) throw new Error('Open proof is unavailable');
+      await this.prepareOpenProof(true);
+    }
+    if (!usable()) {
+      await this.prepareOpenProof(true);
+      if (!usable()) throw new Error('Open proof is unavailable');
+    }
+    const proof = this.preparedOpenProof!.header;
+    this.preparedOpenProof = undefined;
+    return proof;
+  }
+
+  private cancelOpenProofPreparation(): void {
+    this.openProofController?.abort();
+    this.openProofController = undefined;
+    this.openProofTask = undefined;
+    this.preparedOpenProof = undefined;
+  }
+
   async open(): Promise<void> {
     if (this.busy() || !this.metadataReady() || this.lockoutSeconds() > 0) return;
     if (this.emailVerificationRequired() && !this.emailVerified()) return;
     const requestId = this.metadataRequestId;
     this.busy.set(true);
     this.workProgress.begin('open', this.passwordProtected() ? [] : this.metadataFiles().map(file => file.name));
-    this.workProgress.setStage('fetching');
+    this.workProgress.setStage('preparing');
     this.clearError();
     let contentResponseReceived = false;
     try {
       let files = this.metadataFiles();
       let message = '';
+      const proofProvider = async (): Promise<string> => {
+        this.workProgress.setStage('preparing');
+        const proof = await this.takeOpenProof();
+        this.workProgress.setStage('fetching');
+        return proof;
+      };
       const rawResponse = this.passwordProtected()
-        ? await this.api.unlockRaw(this.recipientId, await derivePasswordToken(this.unlockPassword(), this.recipientKey))
-        : await this.api.openRaw(this.recipientId);
+        ? await this.api.unlockRaw(this.recipientId, await derivePasswordToken(this.unlockPassword(), this.recipientKey), proofProvider)
+        : await this.api.openRaw(this.recipientId, await proofProvider());
       contentResponseReceived = true;
       if (requestId !== this.metadataRequestId) return;
       this.workProgress.setStage('processing');
@@ -190,6 +282,7 @@ export class RecipientState {
       this.metadataFiles.set(files);
       this.openedMessage.set(message);
       this.opened.set(true);
+      this.cancelOpenProofPreparation();
     } catch (error) {
       if (requestId === this.metadataRequestId) {
         if (error instanceof SecretApiError && error.status === 429) {
@@ -216,6 +309,8 @@ export class RecipientState {
       if (requestId === this.metadataRequestId) {
         this.unlockPassword.set('');
         this.busy.set(false);
+        if (!this.opened() && !this.oneTimeOpen() && this.openProofAction && !this.document.hidden)
+          void this.prepareOpenProof().catch(() => {});
       }
       this.workProgress.finish();
     }

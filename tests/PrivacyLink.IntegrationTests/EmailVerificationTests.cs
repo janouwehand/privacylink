@@ -312,8 +312,8 @@ public sealed class EmailVerificationTests
         var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
         host.Store.RegisterSecret(id, Email);
 
-        using var blockedOpen = await host.Client.PostAsync($"/api/v1/secrets/{id}/open", null);
-        using var blockedFile = await host.Client.PostAsync($"/api/v1/secrets/{id}/files/{FileId}/open", null);
+        using var blockedOpen = await CreateProofTestHelper.OpenAsync(host.Client, id);
+        using var blockedFile = await CreateProofTestHelper.OpenFileAsync(host.Client, id, FileId);
         await AssertEmailVerificationRequiredAsync(blockedOpen);
         await AssertEmailVerificationRequiredAsync(blockedFile);
 
@@ -331,7 +331,7 @@ public sealed class EmailVerificationTests
         Assert.Contains("max-age=1800", setCookie, StringComparison.OrdinalIgnoreCase);
         var cookie = setCookie.Split(';', 2)[0];
 
-        using var stillBlocked = await host.Client.PostAsync($"/api/v1/secrets/{id}/open", null);
+        using var stillBlocked = await CreateProofTestHelper.OpenAsync(host.Client, id);
         await AssertEmailVerificationRequiredAsync(stillBlocked);
         using var open = await PostWithCookieAsync(host.Client, $"/api/v1/secrets/{id}/open", cookie);
         Assert.Equal(HttpStatusCode.OK, open.StatusCode);
@@ -350,7 +350,7 @@ public sealed class EmailVerificationTests
         var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
         host.Store.RegisterSecret(id, Email);
 
-        using var blockedUnlock = await host.Client.PostAsJsonAsync($"/api/v1/secrets/{id}/unlock", new { password = "1234" });
+        using var blockedUnlock = await CreateProofTestHelper.UnlockAsync(host.Client, id, new { password = "1234" });
         await AssertEmailVerificationRequiredAsync(blockedUnlock);
 
         using var requested = await host.Client.PostAsync($"/api/v1/secrets/{id}/email-verification/request", null);
@@ -377,7 +377,7 @@ public sealed class EmailVerificationTests
         var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
         host.Store.RegisterSecret(id, Email);
 
-        using var blockedOpen = await host.Client.PostAsync($"/api/v1/secrets/{id}/open", null);
+        using var blockedOpen = await CreateProofTestHelper.OpenAsync(host.Client, id);
         await AssertEmailVerificationRequiredAsync(blockedOpen);
 
         using var requested = await host.Client.PostAsync($"/api/v1/secrets/{id}/email-verification/request", null);
@@ -418,6 +418,15 @@ public sealed class EmailVerificationTests
 
     private static async Task<HttpResponseMessage> PostWithCookieAsync(HttpClient client, string path, string cookie, object? body = null)
     {
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 5 && segments[0] == "api" && segments[1] == "v1" && segments[2] == "secrets")
+        {
+            var id = segments[3];
+            if (segments[4] == "open") return await CreateProofTestHelper.OpenAsync(client, id, cookie);
+            if (segments[4] == "unlock" && body is not null) return await CreateProofTestHelper.UnlockAsync(client, id, body, cookie);
+        }
+        if (segments.Length == 7 && segments[0] == "api" && segments[1] == "v1" && segments[2] == "secrets" && segments[4] == "files" && segments[6] == "open")
+            return await CreateProofTestHelper.OpenFileAsync(client, segments[3], segments[5], cookie);
         using var request = new HttpRequestMessage(HttpMethod.Post, path);
         request.Headers.TryAddWithoutValidation("Cookie", cookie);
         if (body is not null) request.Content = JsonContent.Create(body);

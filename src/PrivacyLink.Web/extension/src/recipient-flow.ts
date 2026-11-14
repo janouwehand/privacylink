@@ -4,6 +4,7 @@ import {
   decryptFileName,
   decryptMessage,
   derivePasswordToken,
+  solveOpenProof,
   type EncryptedFileMetadata,
   type EncryptedPayload
 } from '../../../PrivacyLink.Client/src';
@@ -238,6 +239,9 @@ function createRecipientFlow(
   let lockoutTimer: ReturnType<typeof setInterval> | undefined;
   let emailCooldownTimer: ReturnType<typeof setInterval> | undefined;
   let disposed = false;
+  let openProofAction: 'open' | 'unlock' | undefined;
+  let preparedOpenProof: { action: 'open' | 'unlock'; header: string; deadline: number } | undefined;
+  let openProofTask: Promise<void> | undefined;
   const state: RecipientSnapshot = {
     phase: 'loading', error: '', expiresAt: '', passwordProtected: false, oneTimeOpen: false,
     emailVerificationRequired: false, maskedEmailAddress: '', emailVerified: false,
@@ -298,6 +302,45 @@ function createRecipientFlow(
     credentials: 'same-origin',
     referrerPolicy: 'no-referrer'
   });
+  const prepareOpenProof = async (force = false): Promise<void> => {
+    const action = openProofAction;
+    if (!action || disposed) return;
+    if (!force && preparedOpenProof?.action === action && preparedOpenProof.deadline > performance.now() + 5_000) return;
+    if (openProofTask) return openProofTask;
+    const secretId = recipientId;
+    const challengeStartedAt = performance.now();
+    let task!: Promise<void>;
+    task = (async () => {
+      try {
+        const challenge = await readJson<{ version: number; challengeId: string; nonce: string; difficultyBits: number; expiresAt: number; signature: string }>(
+          await request(`/api/v1/secrets/${encodeURIComponent(secretId)}/${action}-challenge`));
+        if (disposed) return;
+        const header = await solveOpenProof(challenge, secretId, action, () => disposed);
+        if (!disposed && secretId === recipientId && action === openProofAction)
+          preparedOpenProof = { action, header, deadline: challengeStartedAt + 295_000 };
+      } finally {
+        if (openProofTask === task) openProofTask = undefined;
+      }
+    })();
+    openProofTask = task;
+    return task;
+  };
+  const takeOpenProof = async (): Promise<string> => {
+    const action = openProofAction;
+    if (!action) throw new Error('Open proof is unavailable');
+    const usable = (): boolean => preparedOpenProof?.action === action && preparedOpenProof.deadline > performance.now() + 5_000;
+    if (!usable()) {
+      preparedOpenProof = undefined;
+      if (!openProofTask) void prepareOpenProof(true);
+      const pending = openProofTask;
+      if (!pending) throw new Error('Open proof is unavailable');
+      await pending;
+    }
+    if (!usable()) throw new Error('Open proof is unavailable');
+    const header = preparedOpenProof!.header;
+    preparedOpenProof = undefined;
+    return header;
+  };
 
   const handleBeforeUnload = (event: BeforeUnloadEvent): void => {
     if (state.oneTimeOpen && state.phase === 'opened') { event.preventDefault(); event.returnValue = ''; }
@@ -326,6 +369,8 @@ function createRecipientFlow(
         emit();
         return;
       }
+      openProofAction = metadata.passwordProtected ? 'unlock' : 'open';
+      void prepareOpenProof().catch(() => {});
       const files = !metadata.passwordProtected && Array.isArray(metadata.files)
         ? await Promise.all(metadata.files.map(async item => {
             const file = asMetadataFile(item);
@@ -428,9 +473,10 @@ function createRecipientFlow(
           if (disposed) return;
           for (let attempt = 0; ; attempt++) {
             if (disposed) return;
+            const proof = await takeOpenProof();
             response = await request(`/api/v1/secrets/${encodeURIComponent(recipientId)}/unlock`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 'Content-Type': 'application/json', 'X-PrivacyLink-Proof': proof },
               body: JSON.stringify({ password: token })
             });
             if (response.status !== 503 || attempt >= 2) break;
@@ -439,7 +485,8 @@ function createRecipientFlow(
             await new Promise(resolve => setTimeout(resolve, Math.min(backoff, 5000) + Math.floor(Math.random() * 250)));
           }
         } else {
-          response = await request(`/api/v1/secrets/${encodeURIComponent(recipientId)}/open`, { method: 'POST' });
+          const proof = await takeOpenProof();
+          response = await request(`/api/v1/secrets/${encodeURIComponent(recipientId)}/open`, { method: 'POST', headers: { 'X-PrivacyLink-Proof': proof } });
         }
         if (disposed) return;
         if (!response.ok) {
@@ -540,6 +587,8 @@ function createRecipientFlow(
       state.openedMessage = '';
       state.busy = false;
       state.lockoutSeconds = 0;
+      preparedOpenProof = undefined;
+      openProofTask = undefined;
       recipientId = '';
       clientKeyValue = '';
       listeners.clear();

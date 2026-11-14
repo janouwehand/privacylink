@@ -1,5 +1,6 @@
 import { Inject, Injectable, InjectionToken } from '@angular/core';
 import type { CreateChallenge } from '../../../PrivacyLink.Client/src';
+import { getSecretCryptoWorkerClient } from './secret-crypto-worker-client';
 import { EncryptedFile, EncryptedFileMetadata, EncryptedMessage, EncryptedPayload, OpenedFile } from './secret-crypto';
 
 export class SecretApiError extends Error {
@@ -45,6 +46,15 @@ export class SecretApi {
   getCreateChallenge(): Promise<CreateChallenge> {
     return this.fetchApi('/api/v1/secrets/create-challenge', { cache: 'no-store', referrerPolicy: 'no-referrer' }).then(response => responseJson<CreateChallenge>(response));
   }
+  async getOpenProof(id: string, action: 'open' | 'unlock' | 'file-open', fileId?: string, signal?: AbortSignal): Promise<string> {
+    const secretPath = `/api/v1/secrets/${SecretApi.pathPart(id)}`;
+    const challengePath = action === 'file-open'
+      ? `${secretPath}/files/${SecretApi.pathPart(fileId ?? '')}/open-challenge`
+      : `${secretPath}/${action}-challenge`;
+    const response = await this.fetchApi(challengePath, { cache: 'no-store', referrerPolicy: 'no-referrer', signal });
+    const challenge = await responseJson<CreateChallenge>(response);
+    return getSecretCryptoWorkerClient().solveOpenProof(challenge, id, action === 'file-open' ? `file-open:${fileId ?? ''}` : action, signal);
+  }
   create(request: { protocolVersion: 1; expiry: '1d' | '7d' | '14d'; message: EncryptedMessage | null; files: EncryptedFile[]; password?: string; emailAddress?: string; oneTimeOpen?: boolean }, proof: string): Promise<{ id: string; expiresAt: string; passwordProtected: boolean; revokeToken: string }> {
     return this.fetchApi('/api/v1/secrets', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-PrivacyLink-Proof': proof }, body: JSON.stringify(request), cache: 'no-store', referrerPolicy: 'no-referrer' }).then(response => responseJson<{ id: string; expiresAt: string; passwordProtected: boolean; revokeToken: string }>(response));
   }
@@ -74,23 +84,26 @@ export class SecretApi {
     });
     if (!response.ok) throw await apiError(response);
   }
-  open(id: string): Promise<EncryptedPayload> {
-    return this.fetchApi(`/api/v1/secrets/${SecretApi.pathPart(id)}/open`, { method: 'POST', cache: 'no-store', referrerPolicy: 'no-referrer' }).then(response => responseJson<EncryptedPayload>(response));
+  async open(id: string, proof?: string): Promise<EncryptedPayload> {
+    const proofHeader = proof ?? await this.getOpenProof(id, 'open');
+    return this.fetchApi(`/api/v1/secrets/${SecretApi.pathPart(id)}/open`, { method: 'POST', headers: { 'X-PrivacyLink-Proof': proofHeader }, cache: 'no-store', referrerPolicy: 'no-referrer' }).then(response => responseJson<EncryptedPayload>(response));
   }
-  openRaw(id: string): Promise<ArrayBuffer> {
-    return this.fetchApi(`/api/v1/secrets/${SecretApi.pathPart(id)}/open`, { method: 'POST', cache: 'no-store', referrerPolicy: 'no-referrer' }).then(responseArrayBuffer);
+  async openRaw(id: string, proof?: string): Promise<ArrayBuffer> {
+    const proofHeader = proof ?? await this.getOpenProof(id, 'open');
+    return this.fetchApi(`/api/v1/secrets/${SecretApi.pathPart(id)}/open`, { method: 'POST', headers: { 'X-PrivacyLink-Proof': proofHeader }, cache: 'no-store', referrerPolicy: 'no-referrer' }).then(responseArrayBuffer);
   }
-  unlock(id: string, password: string): Promise<EncryptedPayload> {
-    return this.unlockWithRetry(id, password, response => responseJson<EncryptedPayload>(response));
-  }
-
-  unlockRaw(id: string, password: string): Promise<ArrayBuffer> {
-    return this.unlockWithRetry(id, password, responseArrayBuffer);
+  unlock(id: string, password: string, proofProvider?: () => Promise<string>): Promise<EncryptedPayload> {
+    return this.unlockWithRetry(id, password, response => responseJson<EncryptedPayload>(response), proofProvider);
   }
 
-  private async unlockWithRetry<T>(id: string, password: string, readResponse: (response: Response) => Promise<T>): Promise<T> {
+  unlockRaw(id: string, password: string, proofProvider?: () => Promise<string>): Promise<ArrayBuffer> {
+    return this.unlockWithRetry(id, password, responseArrayBuffer, proofProvider);
+  }
+
+  private async unlockWithRetry<T>(id: string, password: string, readResponse: (response: Response) => Promise<T>, proofProvider?: () => Promise<string>): Promise<T> {
     for (let attempt = 0; ; attempt++) {
-      const response = await this.fetchApi(`/api/v1/secrets/${SecretApi.pathPart(id)}/unlock`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }), cache: 'no-store', referrerPolicy: 'no-referrer' });
+      const proof = await (proofProvider?.() ?? this.getOpenProof(id, 'unlock'));
+      const response = await this.fetchApi(`/api/v1/secrets/${SecretApi.pathPart(id)}/unlock`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-PrivacyLink-Proof': proof }, body: JSON.stringify({ password }), cache: 'no-store', referrerPolicy: 'no-referrer' });
       if (response.status === 503 && attempt < 2) {
         const retryAfter = Number.parseInt(response.headers.get('Retry-After') ?? '', 10);
         const backoff = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : Math.min(1000 * 2 ** attempt, 4000);
@@ -100,10 +113,12 @@ export class SecretApi {
       return readResponse(response);
     }
   }
-  openFile(id: string, fileId: string): Promise<{ protocolVersion: number; file: OpenedFile }> {
-    return this.fetchApi(`/api/v1/secrets/${SecretApi.pathPart(id)}/files/${SecretApi.pathPart(fileId)}/open`, { method: 'POST', cache: 'no-store', referrerPolicy: 'no-referrer' }).then(response => responseJson(response));
+  async openFile(id: string, fileId: string): Promise<{ protocolVersion: number; file: OpenedFile }> {
+    const proof = await this.getOpenProof(id, 'file-open', fileId);
+    return this.fetchApi(`/api/v1/secrets/${SecretApi.pathPart(id)}/files/${SecretApi.pathPart(fileId)}/open`, { method: 'POST', headers: { 'X-PrivacyLink-Proof': proof }, cache: 'no-store', referrerPolicy: 'no-referrer' }).then(response => responseJson(response));
   }
-  openFileRaw(id: string, fileId: string): Promise<ArrayBuffer> {
-    return this.fetchApi(`/api/v1/secrets/${SecretApi.pathPart(id)}/files/${SecretApi.pathPart(fileId)}/open`, { method: 'POST', cache: 'no-store', referrerPolicy: 'no-referrer' }).then(responseArrayBuffer);
+  async openFileRaw(id: string, fileId: string): Promise<ArrayBuffer> {
+    const proof = await this.getOpenProof(id, 'file-open', fileId);
+    return this.fetchApi(`/api/v1/secrets/${SecretApi.pathPart(id)}/files/${SecretApi.pathPart(fileId)}/open`, { method: 'POST', headers: { 'X-PrivacyLink-Proof': proof }, cache: 'no-store', referrerPolicy: 'no-referrer' }).then(responseArrayBuffer);
   }
 }

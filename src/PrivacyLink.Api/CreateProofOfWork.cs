@@ -47,7 +47,7 @@ internal sealed class CreateProofOfWork
             return ProofCheckResult.Invalid;
         try
         {
-            var consumed = await _replayStore.TryConsumeAsync(id, DateTimeOffset.FromUnixTimeSeconds(expiresAt), now, cancellationToken);
+            var consumed = await _replayStore.TryConsumeAsync("create", id, DateTimeOffset.FromUnixTimeSeconds(expiresAt), now, cancellationToken);
             return consumed switch
             {
                 CreateProofConsumeResult.Consumed => ProofCheckResult.Valid,

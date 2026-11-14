@@ -26,7 +26,8 @@ public sealed class TestApiFactory : WebApplicationFactory<Program>
         builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Security:CreateProofHmacKey"] = HmacKey,
-            ["Security:CreateProofDifficultyBits"] = "1"
+            ["Security:CreateProofDifficultyBits"] = "1",
+            ["Security:OpenProofDifficultyBits"] = "1"
         }));
         builder.ConfigureTestServices(services =>
         {
@@ -39,21 +40,27 @@ public sealed class TestApiFactory : WebApplicationFactory<Program>
 internal sealed class TestCreateProofReplayStore : ICreateProofReplayStore
 {
     private readonly object _gate = new();
-    private readonly Dictionary<string, DateTimeOffset> _entries = new(StringComparer.Ordinal);
-    private readonly bool _full;
+    private readonly Dictionary<(string Scope, string ChallengeId), DateTimeOffset> _entries = new();
+    private readonly bool _fullCreate;
+    private readonly bool _fullOpen;
 
-    public TestCreateProofReplayStore(IConfiguration configuration) => _full = configuration["Tests:CreateProofReplayFull"] == "true";
+    public TestCreateProofReplayStore(IConfiguration configuration)
+    {
+        _fullCreate = configuration["Tests:CreateProofReplayFull"] == "true";
+        _fullOpen = configuration["Tests:OpenProofReplayFull"] == "true";
+    }
 
-    public Task<CreateProofConsumeResult> TryConsumeAsync(string challengeId, DateTimeOffset expiresAt, DateTimeOffset now, CancellationToken cancellationToken)
+    public Task<CreateProofConsumeResult> TryConsumeAsync(string scope, string challengeId, DateTimeOffset expiresAt, DateTimeOffset now, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (_full) return Task.FromResult(CreateProofConsumeResult.Full);
+        if (scope == "create" && _fullCreate || scope == "open" && _fullOpen) return Task.FromResult(CreateProofConsumeResult.Full);
         lock (_gate)
         {
             foreach (var expired in _entries.Where(entry => entry.Value <= now).Select(entry => entry.Key).ToArray()) _entries.Remove(expired);
-            if (_entries.ContainsKey(challengeId)) return Task.FromResult(CreateProofConsumeResult.Replay);
-            if (_entries.Count >= 10_000) return Task.FromResult(CreateProofConsumeResult.Full);
-            _entries.Add(challengeId, expiresAt);
+            var key = (scope, challengeId);
+            if (_entries.ContainsKey(key)) return Task.FromResult(CreateProofConsumeResult.Replay);
+            if (_entries.Keys.Count(entry => entry.Scope == scope) >= 10_000) return Task.FromResult(CreateProofConsumeResult.Full);
+            _entries.Add(key, expiresAt);
             return Task.FromResult(CreateProofConsumeResult.Consumed);
         }
     }
@@ -100,6 +107,65 @@ internal static class CreateProofTestHelper
             }
             if (zeros >= bits) return $"{id}.{nonce}.{bits}.{expires}.{signature}.{counter}";
         }
+    }
+
+    public static Task<HttpResponseMessage> OpenAsync(HttpClient client, string id, string? cookie = null) =>
+        SendOpenAsync(client, $"/api/v1/secrets/{id}/open", id, "open", null, cookie);
+
+    public static Task<HttpResponseMessage> UnlockAsync(HttpClient client, string id, object body, string? cookie = null) =>
+        SendOpenAsync(client, $"/api/v1/secrets/{id}/unlock", id, "unlock", body, cookie);
+
+    public static Task<HttpResponseMessage> OpenFileAsync(HttpClient client, string id, string fileId, string? cookie = null) =>
+        SendOpenAsync(client, $"/api/v1/secrets/{id}/files/{fileId}/open", id, $"file-open:{fileId}", null, cookie);
+
+    public static async Task<string> GetOpenProofAsync(HttpClient client, string secretId, string action)
+    {
+        var challengePath = action.StartsWith("file-open:", StringComparison.Ordinal)
+            ? $"/api/v1/secrets/{secretId}/files/{action[10..]}/open-challenge"
+            : $"/api/v1/secrets/{secretId}/{action}-challenge";
+        using var challengeResponse = await client.GetAsync(challengePath);
+        challengeResponse.EnsureSuccessStatusCode();
+        using var challenge = System.Text.Json.JsonDocument.Parse(await challengeResponse.Content.ReadAsStringAsync());
+        var root = challenge.RootElement;
+        var id = root.GetProperty("challengeId").GetString()!;
+        var nonce = root.GetProperty("nonce").GetString()!;
+        var bits = root.GetProperty("difficultyBits").GetInt32();
+        var expires = root.GetProperty("expiresAt").GetInt64();
+        var signature = root.GetProperty("signature").GetString()!;
+        ulong counter = 0;
+        for (;; counter++)
+        {
+            var proofText = $"PrivacyLink-Open-PoW-v1:{id}:{secretId}:{action}:{nonce}:{counter}";
+            if (HasLeadingZeroBits(SHA256.HashData(Encoding.UTF8.GetBytes(proofText)), bits)) break;
+        }
+        return $"{id}.{nonce}.{bits}.{expires}.{signature}.{counter}";
+    }
+
+    public static async Task<HttpResponseMessage> SendWithOpenProofAsync(HttpClient client, string path, string proof, object? body = null, string? cookie = null)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, path);
+        request.Headers.Add("X-PrivacyLink-Proof", proof);
+        if (cookie is not null) request.Headers.TryAddWithoutValidation("Cookie", cookie);
+        if (body is not null) request.Content = System.Net.Http.Json.JsonContent.Create(body);
+        return await client.SendAsync(request);
+    }
+
+    private static async Task<HttpResponseMessage> SendOpenAsync(HttpClient client, string path, string secretId, string action, object? body, string? cookie)
+    {
+        var proof = await GetOpenProofAsync(client, secretId, action);
+        return await SendWithOpenProofAsync(client, path, proof, body, cookie);
+    }
+
+    private static bool HasLeadingZeroBits(ReadOnlySpan<byte> hash, int bits)
+    {
+        var zeros = 0;
+        foreach (var value in hash)
+        {
+            if (value == 0) { zeros += 8; continue; }
+            zeros += System.Numerics.BitOperations.LeadingZeroCount((uint)value) - 24;
+            break;
+        }
+        return zeros >= bits;
     }
 
     public static async Task<string> GetExpiredProofAsync(HttpClient client)

@@ -449,6 +449,11 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
             [11] = """
                 ALTER TABLE secrets ADD COLUMN IF NOT EXISTS one_time_open boolean NOT NULL DEFAULT false;
                 ALTER TABLE secrets ADD COLUMN IF NOT EXISTS opened_at timestamptz;
+                """,
+            [12] = """
+                ALTER TABLE create_proof_replays ADD COLUMN IF NOT EXISTS scope text NOT NULL DEFAULT 'create';
+                ALTER TABLE create_proof_replays DROP CONSTRAINT IF EXISTS create_proof_replays_pkey;
+                ALTER TABLE create_proof_replays ADD CONSTRAINT create_proof_replays_pkey PRIMARY KEY (scope, challenge_id);
                 """
         };
         foreach (var (version, sql) in migrations.OrderBy(pair => pair.Key))

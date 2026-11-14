@@ -17,12 +17,15 @@ describe('SecretApi unlock retries', () => {
       .mockResolvedValueOnce(new Response(JSON.stringify(payload), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
 
-    const unlocking = new SecretApi().unlock('secret-id', 'password-token');
+    const proofProvider = vi.fn().mockResolvedValue('open-proof');
+    const unlocking = new SecretApi().unlock('secret-id', 'password-token', proofProvider);
     await vi.runAllTimersAsync();
 
     await expect(unlocking).resolves.toEqual(payload);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/v1/secrets/secret-id/unlock');
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toEqual({ 'Content-Type': 'application/json', 'X-PrivacyLink-Proof': 'open-proof' });
+    expect(proofProvider).toHaveBeenCalledTimes(2);
   });
 
   it('stops after two retries and surfaces the final 503', async () => {
@@ -31,7 +34,7 @@ describe('SecretApi unlock retries', () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 503, headers: { 'Retry-After': '1' } }));
     vi.stubGlobal('fetch', fetchMock);
 
-    const unlocking = new SecretApi().unlock('secret-id', 'password-token');
+    const unlocking = new SecretApi().unlock('secret-id', 'password-token', async () => 'open-proof');
     const rejected = expect(unlocking).rejects.toMatchObject({ status: 503 });
     await vi.runAllTimersAsync();
 
@@ -43,7 +46,7 @@ describe('SecretApi unlock retries', () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 403 }));
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(new SecretApi().unlock('secret-id', 'password-token')).rejects.toBeInstanceOf(SecretApiError);
+    await expect(new SecretApi().unlock('secret-id', 'password-token', async () => 'open-proof')).rejects.toBeInstanceOf(SecretApiError);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -51,7 +54,7 @@ describe('SecretApi unlock retries', () => {
     const response = new TextEncoder().encode(JSON.stringify({ protocolVersion: 1, message: null, files: [] }));
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(response, { status: 200 })));
 
-    const raw = await new SecretApi().unlockRaw('secret-id', 'password-token');
+    const raw = await new SecretApi().unlockRaw('secret-id', 'password-token', async () => 'open-proof');
 
     expect(new TextDecoder().decode(raw)).toBe(JSON.stringify({ protocolVersion: 1, message: null, files: [] }));
   });
@@ -61,9 +64,9 @@ describe('SecretApi unlock retries', () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(response, { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
 
-    const raw = await new SecretApi().openRaw('secret-id');
+    const raw = await new SecretApi().openRaw('secret-id', 'open-proof');
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/secrets/secret-id/open', expect.objectContaining({ method: 'POST' }));
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/secrets/secret-id/open', expect.objectContaining({ method: 'POST', headers: { 'X-PrivacyLink-Proof': 'open-proof' } }));
     expect(new TextDecoder().decode(raw)).toBe(JSON.stringify({ protocolVersion: 1, message: null, files: [] }));
   });
 

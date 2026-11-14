@@ -1,6 +1,6 @@
-import { decryptFile, decryptFileName, decryptMessage, encodeBase64Url, encryptFile, EncryptedFile, EncryptedFileMetadata, EncryptedPayload, FileCryptoPhase, OpenedFile, solveCreateProof } from '../../../PrivacyLink.Client/src';
+import { decryptFile, decryptFileName, decryptMessage, encodeBase64Url, encryptFile, EncryptedFile, EncryptedFileMetadata, EncryptedPayload, FileCryptoPhase, OpenedFile, solveCreateProof, solveOpenProof } from '../../../PrivacyLink.Client/src';
 
-type Operation = 'encryptFile' | 'decryptFile' | 'decryptFileName' | 'serializeCreateRequest' | 'encryptFilesAndSerialize' | 'decryptOpenFileResponse' | 'decryptOpenSecretResponse' | 'decryptCachedFile' | 'clearCachedFiles' | 'solveCreateProof' | 'cancelProof';
+type Operation = 'encryptFile' | 'decryptFile' | 'decryptFileName' | 'serializeCreateRequest' | 'encryptFilesAndSerialize' | 'decryptOpenFileResponse' | 'decryptOpenSecretResponse' | 'decryptCachedFile' | 'clearCachedFiles' | 'solveCreateProof' | 'solveOpenProof' | 'cancelProof';
 interface RequestMessage {
   id: number;
   operation: Operation;
@@ -36,6 +36,11 @@ async function processRequest(data: RequestMessage): Promise<void> {
       case 'solveCreateProof': {
         const challenge = payload as { challengeId: string; nonce: string; difficultyBits: number };
         result = await solveCreateProof(challenge, () => cancelledProofs.has(id));
+        break;
+      }
+      case 'solveOpenProof': {
+        const input = payload as { challenge: Parameters<typeof solveOpenProof>[0]; secretId: string; action: Parameters<typeof solveOpenProof>[2] };
+        result = await solveOpenProof(input.challenge, input.secretId, input.action, () => cancelledProofs.has(id));
         break;
       }
       case 'encryptFile':
