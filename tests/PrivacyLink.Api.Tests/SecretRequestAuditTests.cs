@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 using PrivacyLink.Api;
 using PrivacyLink.Infrastructure;
 using PrivacyLink.Services;
@@ -13,7 +14,7 @@ public sealed class SecretRequestAuditTests
         var context = new DefaultHttpContext();
         context.Request.Path = "/api/v1/secrets/AAAAAAAAAAAAAAAAAAAAAA";
         context.Response.Body = responseBody;
-        var middleware = new SecretRequestAuditMiddleware(new ConfigurationBuilder().Build(), new NoopAuditWriter());
+        var middleware = new SecretRequestAuditMiddleware(new ConfigurationBuilder().Build(), new NoopAuditWriter(), NullLogger<SecretRequestAuditMiddleware>.Instance);
 
         await middleware.InvokeAsync(context, async _ =>
         {
@@ -31,7 +32,7 @@ public sealed class SecretRequestAuditTests
         var context = new DefaultHttpContext();
         context.Request.Path = "/api/v1/secrets/AAAAAAAAAAAAAAAAAAAAAA";
         context.Response.Body = responseBody;
-        var middleware = new SecretRequestAuditMiddleware(new ConfigurationBuilder().Build(), new NoopAuditWriter());
+        var middleware = new SecretRequestAuditMiddleware(new ConfigurationBuilder().Build(), new NoopAuditWriter(), NullLogger<SecretRequestAuditMiddleware>.Instance);
 
         await middleware.InvokeAsync(context, async _ =>
         {
