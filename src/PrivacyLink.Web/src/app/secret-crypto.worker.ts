@@ -12,7 +12,7 @@ interface ProgressMessage { id: number; type: 'progress'; current: number; total
 interface ResultMessage { id: number; type: 'result'; result: unknown }
 interface ErrorMessage { id: number; type: 'error'; error: string }
 type ResponseMessage = ProgressMessage | ResultMessage | ErrorMessage;
-interface CachedSecret { files: Map<string, { opened: OpenedFile; filename: string }> }
+interface CachedSecret { files: Map<string, { filename: string; mimeType: string; data: Uint8Array }> }
 
 const workerScope = globalThis as unknown as {
   onmessage: ((event: MessageEvent<RequestMessage>) => void) | null;
@@ -82,7 +82,7 @@ async function processRequest(data: RequestMessage): Promise<void> {
         if (opened.protocolVersion !== 1) throw new Error('unsupported protocol');
         const message = opened.message ? await decryptMessage(opened, clientKey as string) : null;
         const token = encodeBase64Url(crypto.getRandomValues(new Uint8Array(24)));
-        const files = new Map<string, { opened: OpenedFile; filename: string }>();
+        const files = new Map<string, { filename: string; mimeType: string; data: Uint8Array }>();
         const metadata: Array<{ id: string; extension: string; name: string; mimeType: string; size: number }> = [];
         total = Math.max(1, opened.files.length);
         for (let index = 0; index < opened.files.length; index++) {
@@ -90,7 +90,9 @@ async function processRequest(data: RequestMessage): Promise<void> {
           const file = opened.files[index]!;
           progressFilename = file.extension;
           const name = await decryptFileName(file, clientKey as string, reportProgress);
-          files.set(file.id, { opened: file, filename: name });
+          progressFilename = name;
+          const data = await decryptFile(file, clientKey as string, reportProgress);
+          files.set(file.id, { filename: name, mimeType: file.mimeType, data });
           metadata.push({ id: file.id, extension: file.extension, name, mimeType: file.mimeType, size: file.size });
           progressFilename = name;
         }
@@ -103,8 +105,8 @@ async function processRequest(data: RequestMessage): Promise<void> {
         const cached = cachedSecrets.get(input.token)?.files.get(input.fileId);
         if (!cached) throw new Error('cached file is unavailable');
         progressFilename = filename ?? cached.filename;
-        const plaintext = await decryptFile(cached.opened, clientKey as string, reportProgress);
-        result = { filename: filename ?? cached.filename, mimeType: cached.opened.mimeType, data: plaintext.buffer };
+        const plaintext = cached.data.slice();
+        result = { filename: filename ?? cached.filename, mimeType: cached.mimeType, data: plaintext.buffer };
         break;
       }
       case 'clearCachedFiles':

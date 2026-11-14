@@ -3,7 +3,7 @@ import { CreatePage } from './create/create-page';
 import { HistoryPage } from './history/history-page';
 import { NotFoundPage } from './not-found/not-found-page';
 import { PasswordGeneratorPage } from './password-generator/password-generator-page';
-import { RecipientPage } from './recipient/recipient-page';
+import { RecipientPage, recipientLeaveGuard } from './recipient/recipient-page';
 import { SecurityPage } from './security/security-page';
 import { SecurityDetailsPage } from './security/security-details-page';
 import { StatisticsPage } from './statistics/statistics-page';
@@ -17,6 +17,6 @@ export const routes: Routes = [
   { path: 'admin', component: AdminPage },
   { path: 'securitydetails', component: SecurityDetailsPage },
   { path: 'passwordgenerator', component: PasswordGeneratorPage },
-  { path: 's/:id', component: RecipientPage },
+  { path: 's/:id', component: RecipientPage, canDeactivate: [recipientLeaveGuard] },
   { path: '**', component: NotFoundPage }
 ];

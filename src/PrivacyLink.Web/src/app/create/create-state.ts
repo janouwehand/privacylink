@@ -57,6 +57,7 @@ export class CreateState {
   readonly isDragging = signal(false);
   readonly expiry = signal<Expiry>('7d');
   readonly emailVerificationEnabled = signal(false);
+  readonly oneTimeOpenEnabled = signal(true);
   readonly recipientEmail = signal('');
   readonly busy = signal(false);
   readonly proofCalculating = signal(false);
@@ -260,6 +261,7 @@ export class CreateState {
 
   setRecipientEmail(email: string): void { this.recipientEmail.set(email); }
   enableEmailVerification(): void { this.emailVerificationEnabled.set(true); }
+  toggleOneTimeOpen(): void { this.oneTimeOpenEnabled.update(enabled => !enabled); }
   removeEmailVerification(): void {
     this.emailVerificationEnabled.set(false);
     this.recipientEmail.set('');
@@ -386,6 +388,7 @@ export class CreateState {
         expiry: this.expiry(),
         message: this.message().trim() ? encrypted.message : null,
         ...(this.emailVerificationEnabled() ? { emailAddress: this.recipientEmail() } : {}),
+        ...(this.oneTimeOpenEnabled() ? { oneTimeOpen: true } : {}),
         ...(this.password() ? { password: await derivePasswordToken(this.password(), encrypted.clientKey) } : {})
       } as const;
       const created = filesToEncrypt.length
@@ -411,6 +414,7 @@ export class CreateState {
       this.password.set('');
       this.passwordDraft.set('');
       this.emailVerificationEnabled.set(false);
+      this.oneTimeOpenEnabled.set(true);
       this.recipientEmail.set('');
       this.passwordCopied.set(false);
       this.stopProof();
@@ -424,7 +428,7 @@ export class CreateState {
   }
 
   private async createFilesWithWorker(
-    request: { protocolVersion: 1; expiry: Expiry; message: { nonce: string; ciphertext: string } | null; password?: string; emailAddress?: string },
+    request: { protocolVersion: 1; expiry: Expiry; message: { nonce: string; ciphertext: string } | null; password?: string; emailAddress?: string; oneTimeOpen?: boolean },
     files: File[],
     clientKey: Uint8Array
   ): Promise<{ id: string; expiresAt: string; passwordProtected: boolean; revokeToken: string }> {
@@ -481,6 +485,7 @@ export class CreateState {
     this.password.set('');
     this.passwordDraft.set('');
     this.emailVerificationEnabled.set(false);
+    this.oneTimeOpenEnabled.set(true);
     this.recipientEmail.set('');
     this.passwordCopied.set(false);
   }

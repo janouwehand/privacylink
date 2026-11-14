@@ -27,6 +27,7 @@ export class RecipientState {
   readonly openedMessage = signal('');
   readonly expiresAt = signal('');
   readonly passwordProtected = signal(false);
+  readonly oneTimeOpen = signal(false);
   readonly emailVerificationRequired = signal(false);
   readonly maskedEmailAddress = signal('');
   readonly emailCodeRequested = signal(false);
@@ -73,6 +74,7 @@ export class RecipientState {
         this.setUnavailable();
         return;
       }
+      if (metadata.oneTimeOpened) { this.setUnavailable(); return; }
       let files: { id: string; name: string; extension: string; mimeType: string; size: number }[] = [];
       if (!metadata.passwordProtected && metadata.files.length) {
         this.workProgress.begin('open', metadata.files.map((_, index) => this.language.t('workFileNumber', { number: index + 1 })));
@@ -89,6 +91,7 @@ export class RecipientState {
       }
       if (requestId !== this.metadataRequestId) return;
       this.passwordProtected.set(metadata.passwordProtected);
+      this.oneTimeOpen.set(metadata.oneTimeOpen === true);
       const emailVerificationRequired = metadata.emailVerificationRequired === true;
       this.emailVerificationRequired.set(emailVerificationRequired);
       this.maskedEmailAddress.set(metadata.maskedEmailAddress ?? '');
@@ -131,6 +134,7 @@ export class RecipientState {
     this.opened.set(false);
     this.openedMessage.set('');
     this.passwordProtected.set(false);
+    this.oneTimeOpen.set(false);
     this.emailVerificationRequired.set(false);
     this.maskedEmailAddress.set('');
     this.emailCodeRequested.set(false);
@@ -149,12 +153,14 @@ export class RecipientState {
     this.workProgress.begin('open', this.passwordProtected() ? [] : this.metadataFiles().map(file => file.name));
     this.workProgress.setStage('fetching');
     this.clearError();
+    let contentResponseReceived = false;
     try {
       let files = this.metadataFiles();
       let message = '';
       const rawResponse = this.passwordProtected()
         ? await this.api.unlockRaw(this.recipientId, await derivePasswordToken(this.unlockPassword(), this.recipientKey))
         : await this.api.openRaw(this.recipientId);
+      contentResponseReceived = true;
       if (requestId !== this.metadataRequestId) return;
       this.workProgress.setStage('processing');
       const worker = getSecretCryptoWorkerClient();
@@ -174,8 +180,8 @@ export class RecipientState {
         files = opened.files;
       } else {
         void worker.clearCachedFiles(opened.token);
-        if (this.passwordProtected() && this.metadataFileCount() > 0) throw new Error('missing protected file payload');
-        if (!this.passwordProtected()) files = this.metadataFiles();
+        if (this.metadataFileCount() > 0) throw new Error('missing file payload');
+        files = [];
       }
       this.workProgress.setFiles(files.map(file => file.name));
       files.forEach((_, index) => this.workProgress.setFileStatus(index, 'done'));
@@ -194,8 +200,12 @@ export class RecipientState {
           this.setError({ key: 'emailVerificationRequired' });
         } else if (error instanceof SecretApiError && error.status === 404) {
           this.setUnavailable();
-        } else if (this.isRetryableRequestFailure(error)) {
+        } else if (this.passwordProtected() && error instanceof SecretApiError && error.status === 503 && error.code === 'temporarily_unavailable') {
           this.setError({ key: 'temporarilyUnavailable' });
+        } else if (this.isRetryableRequestFailure(error)) {
+          this.setError({ key: this.oneTimeOpen() ? 'oneTimeOpenDeliveryFailed' : 'temporarilyUnavailable' });
+        } else if (this.oneTimeOpen() && contentResponseReceived) {
+          this.setError({ key: 'oneTimeOpenDeliveryFailed' });
         } else if (this.passwordProtected() && error instanceof SecretApiError && error.status === 403) {
           this.setError({ key: 'incorrectPassword' });
         } else {
@@ -345,16 +355,9 @@ export class RecipientState {
     try {
       const worker = getSecretCryptoWorkerClient();
       let opened;
-      if (this.passwordProtected()) {
-        if (!this.cachedFilesToken) throw new Error('missing file payload');
-        this.workProgress.setStage('processing');
-        opened = await worker.decryptCachedFile(this.cachedFilesToken, file.id, this.recipientKey, undefined, file.name);
-      } else {
-        this.workProgress.setStage('fetching');
-        const response = await this.api.openFileRaw(this.recipientId, file.id);
-        this.workProgress.setStage('processing');
-        opened = await worker.decryptOpenFileResponse(response, this.recipientKey);
-      }
+      if (!this.cachedFilesToken) throw new Error('missing file payload');
+      this.workProgress.setStage('processing');
+      opened = await worker.decryptCachedFile(this.cachedFilesToken, file.id, this.recipientKey, undefined, file.name);
       if (requestId !== this.metadataRequestId) return;
       this.workProgress.setFileStatus(0, 'done');
       const url = URL.createObjectURL(new Blob([opened.data], { type: opened.mimeType || file.mimeType || 'application/octet-stream' }));

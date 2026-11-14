@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
-import { decryptMessage, derivePasswordToken, encryptFile, encryptMessage } from '../../../PrivacyLink.Client/src';
+import { decodeCanonical, decryptMessage, derivePasswordToken, encryptFile, encryptMessage } from '../../../PrivacyLink.Client/src';
 import { parseRecipientShareUrl, startRecipientContentScript, type RecipientFlowController, type RecipientFlowDependencies } from '../../extension/src/recipient-flow';
 
 afterEach(() => {
@@ -284,7 +284,7 @@ describe('PrivacyLink extension recipient flow', () => {
     controller!.dispose();
   });
 
-  it('decrypts downloadable file payloads locally without sending the fragment key', async () => {
+  it('retrieves and decrypts every attachment during open, then downloads locally', async () => {
     const encrypted = await encryptMessage('');
     const clientKey = (await import('../../../PrivacyLink.Client/src')).decodeCanonical(encrypted.clientKey, 32);
     const file = await encryptFile(new File(['private file bytes'], 'notes.txt', { type: 'text/plain' }), clientKey);
@@ -292,9 +292,8 @@ describe('PrivacyLink extension recipient flow', () => {
     const url = `https://privacylink.nl/s/${id}#${encrypted.clientKey}`;
     const downloads: Array<{ name: string; bytes: string }> = [];
     const { fetcher, requests } = makeFetch(path => {
-      if (path === `/api/v1/secrets/${id}`) return new Response(JSON.stringify(metadata({ hasMessage: false, fileCount: 1, files: [file] })), { status: 200 });
-      if (path === `/api/v1/secrets/${id}/open`) return new Response(JSON.stringify({ protocolVersion: 1, message: null, files: [] }), { status: 200 });
-      if (path === `/api/v1/secrets/${id}/files/${file.id}/open`) return new Response(JSON.stringify({ protocolVersion: 1, file }), { status: 200 });
+      if (path === `/api/v1/secrets/${id}`) return new Response(JSON.stringify(metadata({ hasMessage: false, fileCount: 1, files: [file], oneTimeOpen: true })), { status: 200 });
+      if (path === `/api/v1/secrets/${id}/open`) return new Response(JSON.stringify({ protocolVersion: 1, message: null, files: [file] }), { status: 200 });
       return new Response('{}', { status: 404 });
     });
     const controller = start(url, fetcher, {
@@ -304,11 +303,101 @@ describe('PrivacyLink extension recipient flow', () => {
     expect(controller).not.toBeNull();
     await controller!.ready;
     expect(controller!.snapshot().files.map(item => item.name)).toEqual(['notes.txt']);
+    expect(controller!.snapshot().oneTimeOpen).toBe(true);
     await controller!.open();
+    expect(controller!.snapshot().phase).toBe('opened');
     await controller!.download(file.id);
 
     expect(downloads).toEqual([{ name: 'notes.txt', bytes: 'private file bytes' }]);
+    expect(requests.map(request => request.path)).toEqual([`/api/v1/secrets/${id}`, `/api/v1/secrets/${id}/open`]);
+    const beforeUnload = new Event('beforeunload', { cancelable: true });
+    document.defaultView!.dispatchEvent(beforeUnload);
+    expect(beforeUnload.defaultPrevented).toBe(true);
     expect(JSON.stringify(requests)).not.toContain(encrypted.clientKey);
+    controller!.dispose();
+  });
+
+  it('opens and decrypts a near-limit attachment sequentially in the extension', async () => {
+    const encryptedMessage = await encryptMessage('');
+    const clientKey = decodeCanonical(encryptedMessage.clientKey, 32);
+    const size = 72 * 1024 * 1024;
+    let encrypted: Awaited<ReturnType<typeof encryptFile>> | null = await (async () => {
+      const source = new Uint8Array(size);
+      source[0] = 0x50;
+      source[size - 1] = 0x4c;
+      const file = new File([source], 'near-limit.txt', { type: 'text/plain' });
+      return encryptFile(file, clientKey);
+    })();
+
+    const encryptedMetadata = {
+      id: encrypted.id,
+      extension: encrypted.extension,
+      nameNonce: encrypted.nameNonce,
+      nameCiphertext: encrypted.nameCiphertext,
+      mimeType: encrypted.mimeType,
+      size: encrypted.size
+    };
+    const id = 'AAAAAAAAAAAAAAAAAAAAAA';
+    const url = `https://privacylink.nl/s/${id}#${encryptedMessage.clientKey}`;
+    const { fetcher } = makeFetch(path => {
+      if (path === `/api/v1/secrets/${id}`) return new Response(JSON.stringify(metadata({ hasMessage: false, fileCount: 1, files: [encryptedMetadata], oneTimeOpen: true })), { status: 200 });
+      if (path === `/api/v1/secrets/${id}/open`) {
+        if (!encrypted) throw new Error('Missing test response payload');
+        const body = JSON.stringify({ protocolVersion: 1, message: null, files: [encrypted] });
+        encrypted = null;
+        return new Response(body, { status: 200 });
+      }
+      return new Response('{}', { status: 404 });
+    });
+    const downloads: Array<{ name: string; length: number }> = [];
+    const controller = start(url, fetcher, {
+      downloadFile: (_document, recipientFile, filename, bytes) => downloads.push({ name: filename || recipientFile.name, length: bytes.byteLength })
+    });
+    await controller!.ready;
+    await controller!.open();
+    await controller!.download(encryptedMetadata.id);
+    expect(controller!.snapshot().phase).toBe('opened');
+    expect(downloads).toEqual([{ name: 'near-limit.txt', length: size }]);
+    controller!.dispose();
+  });
+
+  it.each([
+    ['network failure', null],
+    ['HTTP 500', 500]
+  ])('does not suggest retrying a one-time opening after %s', async (_label, status) => {
+    const id = 'AAAAAAAAAAAAAAAAAAAAAA';
+    const url = `https://privacylink.nl/s/${id}#${'A'.repeat(43)}`;
+    const { fetcher } = makeFetch(path => {
+      if (path === `/api/v1/secrets/${id}`) return new Response(JSON.stringify(metadata({ oneTimeOpen: true })), { status: 200 });
+      if (status === null) throw new TypeError('Failed to fetch');
+      return new Response('{}', { status });
+    });
+    const controller = start(url, fetcher);
+
+    expect(controller).not.toBeNull();
+    await controller!.ready;
+    await controller!.open();
+
+    expect(controller!.snapshot().error).toContain('Do not retry this link; ask the sender for a new one.');
+    expect(controller!.snapshot().error).not.toContain('Please try again.');
+    controller!.dispose();
+  });
+
+  it('keeps the known pre-claim password-capacity 503 retryable for one-time secrets', async () => {
+    const id = 'AAAAAAAAAAAAAAAAAAAAAA';
+    const url = `https://privacylink.nl/s/${id}#${'A'.repeat(43)}`;
+    const { fetcher, requests } = makeFetch(path => {
+      if (path === `/api/v1/secrets/${id}`) return new Response(JSON.stringify(metadata({ oneTimeOpen: true, passwordProtected: true })), { status: 200 });
+      return new Response(JSON.stringify({ code: 'temporarily_unavailable' }), { status: 503, headers: { 'Retry-After': '1' } });
+    });
+    const controller = start(url, fetcher);
+
+    await controller!.ready;
+    await controller!.open('reader password');
+
+    expect(requests.filter(request => request.path.endsWith('/unlock'))).toHaveLength(3);
+    expect(controller!.snapshot().error).toContain('Please try again.');
+    expect(controller!.snapshot().error).not.toContain('Do not retry this link');
     controller!.dispose();
   });
 });

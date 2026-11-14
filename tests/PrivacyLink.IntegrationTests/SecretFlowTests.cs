@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using PrivacyLink.Services;
 
 public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
 {
@@ -297,7 +298,7 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
     }
 
     [Fact]
-    public async Task UnprotectedOpenReturnsNoFileBlobsAndFileOpenReturnsCombinedFile()
+    public async Task UnprotectedOpenReturnsEveryFileAndLegacyFileRouteRemainsAvailable()
     {
         var fileId = Convert.ToBase64String(new byte[16]).TrimEnd('=').Replace('+', '-').Replace('/', '_');
         var payload = new { protocolVersion = 1, expiry = "1d", files = new[] { new { id = fileId, extension = ".txt", nameNonce = "AAAAAAAAAAAAAAAA", nameCiphertext = "AAAAAAAAAAAAAAAAAAAAAA", mimeType = "text/plain", size = 1L, nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" } } };
@@ -310,7 +311,9 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         Assert.False(metadata.GetProperty("files")[0].TryGetProperty("name", out _));
         var open = await _client.PostAsync($"/api/v1/secrets/{id}/open", null);
         Assert.Equal(HttpStatusCode.OK, open.StatusCode);
-        Assert.Empty((await open.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("files").EnumerateArray());
+        var openBody = await open.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Single(openBody.GetProperty("files").EnumerateArray());
+        Assert.Equal(fileId, openBody.GetProperty("files")[0].GetProperty("id").GetString());
         var opened = await _client.PostAsync($"/api/v1/secrets/{id}/files/{fileId}/open", null);
         Assert.Equal(HttpStatusCode.OK, opened.StatusCode);
         var openedBody = JsonDocument.Parse(await opened.Content.ReadAsStringAsync()).RootElement;
@@ -318,6 +321,98 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         Assert.Equal("AAAAAAAAAAAAAAAAAAAAAA", openedBody.GetProperty("file").GetProperty("nameCiphertext").GetString());
         Assert.Contains("AAAAAAAAAAAAAAAAAAAAAAA", openedBody.GetProperty("file").GetProperty("ciphertext").GetString());
         Assert.Equal(fileId, openedBody.GetProperty("file").GetProperty("id").GetString());
+    }
+
+    [Fact]
+    public async Task OneTimeOpenReturnsAllContentOnceAndLegacyFileRouteCannotConsumeOrBypass()
+    {
+        var fileId = Convert.ToBase64String(Enumerable.Repeat((byte)3, 16).ToArray()).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        var payload = new
+        {
+            protocolVersion = 1,
+            expiry = "1d",
+            oneTimeOpen = true,
+            message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" },
+            files = new[] { new { id = fileId, extension = ".txt", nameNonce = "AAAAAAAAAAAAAAAA", nameCiphertext = "AAAAAAAAAAAAAAAAAAAAAA", mimeType = "text/plain", size = 1L, nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" } }
+        };
+        using var created = await CreateProofTestHelper.CreateAsync(_client, payload);
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+
+        var metadata = await _client.GetFromJsonAsync<JsonElement>($"/api/v1/secrets/{id}");
+        Assert.True(metadata.GetProperty("oneTimeOpen").GetBoolean());
+        Assert.False(metadata.GetProperty("oneTimeOpened").GetBoolean());
+
+        using var directFileBeforeOpen = await _client.PostAsync($"/api/v1/secrets/{id}/files/{fileId}/open", null);
+        Assert.Equal(HttpStatusCode.NotFound, directFileBeforeOpen.StatusCode);
+        metadata = await _client.GetFromJsonAsync<JsonElement>($"/api/v1/secrets/{id}");
+        Assert.False(metadata.GetProperty("oneTimeOpened").GetBoolean());
+
+        using var opened = await _client.PostAsync($"/api/v1/secrets/{id}/open", null);
+        Assert.Equal(HttpStatusCode.OK, opened.StatusCode);
+        var body = await opened.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Contains("AAAAAAAAAAAAAAAAAAAAAAA", body.GetProperty("message").GetProperty("ciphertext").GetString());
+        Assert.Single(body.GetProperty("files").EnumerateArray());
+        Assert.Equal(fileId, body.GetProperty("files")[0].GetProperty("id").GetString());
+
+        metadata = await _client.GetFromJsonAsync<JsonElement>($"/api/v1/secrets/{id}");
+        Assert.True(metadata.GetProperty("oneTimeOpened").GetBoolean());
+        using var repeatedOpen = await _client.PostAsync($"/api/v1/secrets/{id}/open", null);
+        using var directFileAfterOpen = await _client.PostAsync($"/api/v1/secrets/{id}/files/{fileId}/open", null);
+        Assert.Equal(HttpStatusCode.NotFound, repeatedOpen.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, directFileAfterOpen.StatusCode);
+    }
+
+    [Fact]
+    public async Task ConcurrentOneTimeOpenRequestsReleaseContentToAtMostOneCaller()
+    {
+        using var created = await CreateProofTestHelper.CreateAsync(_client, new
+        {
+            protocolVersion = 1,
+            expiry = "1d",
+            oneTimeOpen = true,
+            message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" },
+            files = Array.Empty<object>()
+        });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+
+        var attempts = await Task.WhenAll(Enumerable.Range(0, 12).Select(_ => _client.PostAsync($"/api/v1/secrets/{id}/open", null)));
+
+        Assert.Single(attempts.Where(response => response.StatusCode == HttpStatusCode.OK));
+        Assert.Equal(11, attempts.Count(response => response.StatusCode == HttpStatusCode.NotFound));
+        foreach (var response in attempts) response.Dispose();
+    }
+
+    [Fact]
+    public async Task OneTimeOpenRemainsConsumedWhenBlobDeliveryFailsAfterTheClaim()
+    {
+        var blobStorage = new FailOnceBlobStorage();
+        using var factory = new TestApiFactory().WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+        {
+            services.RemoveAll<IBlobStorage>();
+            services.AddSingleton<IBlobStorage>(blobStorage);
+        }));
+        using var client = factory.CreateClient();
+        using var created = await CreateProofTestHelper.CreateAsync(client, new
+        {
+            protocolVersion = 1,
+            expiry = "1d",
+            oneTimeOpen = true,
+            message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" },
+            files = Array.Empty<object>()
+        });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+
+        blobStorage.FailNextRead();
+        using var failedDelivery = await client.PostAsync($"/api/v1/secrets/{id}/open", null);
+        Assert.Equal(HttpStatusCode.InternalServerError, failedDelivery.StatusCode);
+        var metadata = await client.GetFromJsonAsync<JsonElement>($"/api/v1/secrets/{id}");
+        Assert.True(metadata.GetProperty("oneTimeOpened").GetBoolean());
+
+        using var retry = await client.PostAsync($"/api/v1/secrets/{id}/open", null);
+        Assert.Equal(HttpStatusCode.NotFound, retry.StatusCode);
     }
 
     [Fact]
@@ -354,6 +449,62 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         var unlocked = await client.PostAsJsonAsync($"/api/v1/secrets/{id}/unlock", new { password = "correct horse" });
         Assert.Equal(HttpStatusCode.OK, unlocked.StatusCode);
         Assert.Contains("AAAAAAAAAAAAAAAAAAAAAAA", await unlocked.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task OneTimeProtectedOpenDoesNotConsumeOnWrongPasswordAndUnlockReturnsCombinedAndMessageOnlyContent()
+    {
+        using var factory = new TestApiFactory().WithWebHostBuilder(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Security:PasswordPepper"] = "integration-test-pepper",
+            ["Security:Argon2:MemorySizeKb"] = "8192",
+            ["Security:Argon2:Iterations"] = "1",
+            ["Security:Argon2:DegreeOfParallelism"] = "1"
+        })));
+        using var client = factory.CreateClient();
+        var fileId = Convert.ToBase64String(Enumerable.Repeat((byte)4, 16).ToArray()).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        using var created = await CreateProofTestHelper.CreateAsync(client, new
+        {
+            protocolVersion = 1,
+            expiry = "1d",
+            oneTimeOpen = true,
+            password = "correct horse",
+            message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" },
+            files = new[] { new { id = fileId, extension = ".txt", nameNonce = "AAAAAAAAAAAAAAAA", nameCiphertext = "AAAAAAAAAAAAAAAAAAAAAA", mimeType = "text/plain", size = 1L, nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" } }
+        });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+
+        using var wrongPassword = await client.PostAsJsonAsync($"/api/v1/secrets/{id}/unlock", new { password = "wrong horse" });
+        Assert.Equal(HttpStatusCode.Forbidden, wrongPassword.StatusCode);
+        var stillAvailable = await client.GetFromJsonAsync<JsonElement>($"/api/v1/secrets/{id}");
+        Assert.False(stillAvailable.GetProperty("oneTimeOpened").GetBoolean());
+
+        using var unlocked = await client.PostAsJsonAsync($"/api/v1/secrets/{id}/unlock", new { password = "correct horse" });
+        Assert.Equal(HttpStatusCode.OK, unlocked.StatusCode);
+        var body = await unlocked.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Single(body.GetProperty("files").EnumerateArray());
+        Assert.Equal(fileId, body.GetProperty("files")[0].GetProperty("id").GetString());
+
+        using var replay = await client.PostAsJsonAsync($"/api/v1/secrets/{id}/unlock", new { password = "correct horse" });
+        Assert.Equal(HttpStatusCode.NotFound, replay.StatusCode);
+
+        using var messageOnlyCreated = await CreateProofTestHelper.CreateAsync(client, new
+        {
+            protocolVersion = 1,
+            expiry = "1d",
+            oneTimeOpen = true,
+            password = "correct horse",
+            message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" },
+            files = Array.Empty<object>()
+        });
+        Assert.Equal(HttpStatusCode.Created, messageOnlyCreated.StatusCode);
+        var messageOnlyId = (await messageOnlyCreated.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        using var messageOnlyOpen = await client.PostAsJsonAsync($"/api/v1/secrets/{messageOnlyId}/unlock", new { password = "correct horse" });
+        Assert.Equal(HttpStatusCode.OK, messageOnlyOpen.StatusCode);
+        var messageOnlyBody = await messageOnlyOpen.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.NotEqual(JsonValueKind.Null, messageOnlyBody.GetProperty("message").ValueKind);
+        Assert.Empty(messageOnlyBody.GetProperty("files").EnumerateArray());
     }
 
     [Fact]
@@ -538,5 +689,37 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         private DateTimeOffset _utcNow = utcNow;
         public override DateTimeOffset GetUtcNow() => _utcNow;
         public void Advance(TimeSpan duration) => _utcNow += duration;
+    }
+
+    private sealed class FailOnceBlobStorage : IBlobStorage
+    {
+        private readonly Dictionary<(string SecretId, string BlobId), byte[]> _blobs = new();
+        private int _failNextRead;
+
+        public void FailNextRead() => Interlocked.Exchange(ref _failNextRead, 1);
+
+        public Task PutAsync(string secretId, string blobId, ReadOnlyMemory<byte> contents, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _blobs[(secretId, blobId)] = contents.ToArray();
+            return Task.CompletedTask;
+        }
+
+        public Task<byte[]> ReadAsync(string secretId, string blobId, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (Interlocked.Exchange(ref _failNextRead, 0) == 1)
+                return Task.FromException<byte[]>(new IOException("Injected blob read failure after one-time claim."));
+            return _blobs.TryGetValue((secretId, blobId), out var contents)
+                ? Task.FromResult(contents.ToArray())
+                : Task.FromException<byte[]>(new FileNotFoundException());
+        }
+
+        public Task DeleteAsync(string secretId, string blobId, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _blobs.Remove((secretId, blobId));
+            return Task.CompletedTask;
+        }
     }
 }

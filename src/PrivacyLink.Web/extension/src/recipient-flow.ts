@@ -5,8 +5,7 @@ import {
   decryptMessage,
   derivePasswordToken,
   type EncryptedFileMetadata,
-  type EncryptedPayload,
-  type OpenedFile
+  type EncryptedPayload
 } from '../../../PrivacyLink.Client/src';
 
 const SHARE_ORIGIN = 'https://privacylink.nl';
@@ -26,6 +25,7 @@ export interface RecipientSnapshot {
   error: string;
   expiresAt: string;
   passwordProtected: boolean;
+  oneTimeOpen: boolean;
   emailVerificationRequired: boolean;
   maskedEmailAddress: string;
   emailVerified: boolean;
@@ -232,14 +232,14 @@ function createRecipientFlow(
     try { return document.defaultView?.localStorage; }
     catch { return undefined; }
   })();
-  const filesById = new Map<string, OpenedFile>();
+  const filesById = new Map<string, { filename: string; mimeType: string; data: Uint8Array }>();
   const listeners = new Set<(snapshot: RecipientSnapshot) => void>();
   const abortController = new AbortController();
   let lockoutTimer: ReturnType<typeof setInterval> | undefined;
   let emailCooldownTimer: ReturnType<typeof setInterval> | undefined;
   let disposed = false;
   const state: RecipientSnapshot = {
-    phase: 'loading', error: '', expiresAt: '', passwordProtected: false,
+    phase: 'loading', error: '', expiresAt: '', passwordProtected: false, oneTimeOpen: false,
     emailVerificationRequired: false, maskedEmailAddress: '', emailVerified: false,
     emailCodeRequested: false, emailCodeCooldownSeconds: 0, fileCount: 0,
     files: [], openedMessage: '', busy: false, lockoutSeconds: 0
@@ -299,6 +299,11 @@ function createRecipientFlow(
     referrerPolicy: 'no-referrer'
   });
 
+  const handleBeforeUnload = (event: BeforeUnloadEvent): void => {
+    if (state.oneTimeOpen && state.phase === 'opened') { event.preventDefault(); event.returnValue = ''; }
+  };
+  document.defaultView?.addEventListener('beforeunload', handleBeforeUnload);
+
   const ready = (async (): Promise<void> => {
     try {
       const metadata = await readJson<{
@@ -311,9 +316,11 @@ function createRecipientFlow(
         files: EncryptedFileMetadata[];
         emailVerificationRequired?: boolean;
         maskedEmailAddress?: string | null;
+        oneTimeOpen?: boolean;
+        oneTimeOpened?: boolean;
       }>(await request(`/api/v1/secrets/${encodeURIComponent(recipientId)}`));
       if (disposed) return;
-      if (!metadata.exists || metadata.protocolVersion !== 1 || (!metadata.hasMessage && metadata.fileCount === 0)) {
+      if (!metadata.exists || metadata.protocolVersion !== 1 || (!metadata.hasMessage && metadata.fileCount === 0) || metadata.oneTimeOpened) {
         state.phase = 'unavailable';
         state.error = 'This secret is unavailable.';
         emit();
@@ -334,6 +341,7 @@ function createRecipientFlow(
       state.phase = 'ready';
       state.expiresAt = metadata.expiresAt;
       state.passwordProtected = metadata.passwordProtected;
+      state.oneTimeOpen = metadata.oneTimeOpen === true;
       state.emailVerificationRequired = metadata.emailVerificationRequired === true;
       state.maskedEmailAddress = metadata.maskedEmailAddress ?? '';
       state.emailVerified = state.emailVerificationRequired && hasEmailSession();
@@ -412,6 +420,7 @@ function createRecipientFlow(
       state.busy = true;
       clearError();
       emit();
+      let contentResponseReceived = false;
       try {
         let response: Response;
         if (state.passwordProtected) {
@@ -443,6 +452,7 @@ function createRecipientFlow(
           }
           throw error;
         }
+        contentResponseReceived = true;
         const opened = await response.json() as EncryptedPayload;
         if (disposed) return;
         if (opened.protocolVersion !== 1 || (!opened.message && opened.files.length === 0 && state.fileCount === 0)) {
@@ -450,27 +460,35 @@ function createRecipientFlow(
         }
         const message = opened.message ? await decryptMessage(opened, clientKeyValue) : '';
         if (disposed) return;
-        if (state.passwordProtected) {
-          if (!opened.files.length && state.fileCount > 0) throw new Error('Missing protected file payload');
+        if (opened.files.length) {
           filesById.clear();
-          const files = await Promise.all(opened.files.map(async file => {
-            filesById.set(file.id, file);
-            return {
+          const files: RecipientFile[] = [];
+          for (const file of opened.files) {
+            const filename = await decryptFileName(file, clientKeyValue);
+            if (disposed) return;
+            const data = await decryptFile(file, clientKeyValue);
+            if (disposed) return;
+            filesById.set(file.id, { filename, mimeType: file.mimeType, data });
+            files.push({
               id: file.id,
-              name: await decryptFileName(file, clientKeyValue),
+              name: filename,
               mimeType: file.mimeType,
               size: file.size
-            };
-          }));
+            });
+          }
           if (disposed) return;
           state.files = files;
-        }
+        } else if (state.fileCount > 0) throw new Error('Missing file payload');
         if (disposed) return;
         state.openedMessage = message;
         state.phase = 'opened';
       } catch (error) {
         if (disposed) return;
-        state.error = errorText(error, 'open');
+        const knownPreClaimCapacityError = state.passwordProtected && error instanceof Error && 'status' in error &&
+          (error as ApiError).status === 503 && (error as ApiError).code === 'temporarily_unavailable';
+        state.error = state.oneTimeOpen && !knownPreClaimCapacityError && (contentResponseReceived || isRetryableRequestFailure(error))
+          ? 'The one-time opening may already have been processed, so this link may be used up. Do not retry this link; ask the sender for a new one.'
+          : errorText(error, 'open');
       } finally {
         if (!disposed) {
           state.busy = false;
@@ -486,21 +504,11 @@ function createRecipientFlow(
       clearError();
       emit();
       try {
-        let openedFile = filesById.get(fileId);
-        if (!openedFile) {
-          const response = await request(`/api/v1/secrets/${encodeURIComponent(recipientId)}/files/${encodeURIComponent(fileId)}/open`, { method: 'POST' });
-          if (disposed) return;
-          const payload = await readJson<{ protocolVersion: number; file: OpenedFile }>(response);
-          if (payload.protocolVersion !== 1) throw new Error('Unsupported file payload');
-          openedFile = payload.file;
-        }
-        if (disposed || !openedFile) return;
-        const file = asMetadataFile(openedFile);
-        const filename = await decryptFileName(file, clientKeyValue);
+        const openedFile = filesById.get(fileId);
+        if (disposed || !openedFile) throw new Error('Missing file payload');
+        const data = openedFile.data;
         if (disposed) return;
-        const data = await decryptFile(openedFile, clientKeyValue);
-        if (disposed) return;
-        (dependencies.downloadFile ?? downloadBrowserFile)(document, fileInfo, filename, data);
+        (dependencies.downloadFile ?? downloadBrowserFile)(document, fileInfo, openedFile.filename, data);
       } catch (error) {
         if (disposed) return;
         state.error = errorText(error, 'download');
@@ -517,6 +525,7 @@ function createRecipientFlow(
       abortController.abort();
       clearLockout();
       clearEmailCooldown();
+      document.defaultView?.removeEventListener('beforeunload', handleBeforeUnload);
       filesById.clear();
       state.phase = 'unavailable';
       state.error = '';
@@ -637,6 +646,7 @@ function mountRecipientOverlay(document: Document, controller: RecipientFlowCont
     if (snapshot.phase === 'unavailable' || snapshot.phase === 'error') return;
     if (snapshot.phase === 'opened') {
       content.append(makeTextElement(document, 'p', 'The secret was decrypted in the installed PrivacyLink client.', 'note'));
+      if (snapshot.oneTimeOpen) content.append(makeTextElement(document, 'p', 'One-time link: leaving this page loses access. The server keeps the encrypted content until expiry or revocation.', 'note'));
       if (snapshot.openedMessage) {
         const section = document.createElement('section');
         section.append(makeTextElement(document, 'h2', 'Message'));
@@ -666,6 +676,7 @@ function mountRecipientOverlay(document: Document, controller: RecipientFlowCont
 
     const expiry = new Date(snapshot.expiresAt);
     content.append(makeTextElement(document, 'p', `This link expires ${Number.isNaN(expiry.valueOf()) ? 'soon' : expiry.toLocaleString()}.`, 'note'));
+    if (snapshot.oneTimeOpen) content.append(makeTextElement(document, 'p', 'This content can be opened only once.', 'note'));
     if (snapshot.fileCount) content.append(makeTextElement(document, 'p', `${snapshot.fileCount} file${snapshot.fileCount === 1 ? '' : 's'} included.`, 'note'));
 
     if (snapshot.emailVerificationRequired && !snapshot.emailVerified) {

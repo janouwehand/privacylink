@@ -170,6 +170,18 @@ internal sealed class InMemorySecretRepository : ISecretRepository, IInfrastruct
         lock (_gate) return Task.FromResult(_secrets.TryGetValue(id, out var secret) && secret.ExpiresAt > now ? secret : null);
     }
 
+    public Task<bool> TryConsumeOneTimeOpenAsync(string id, DateTimeOffset now, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+        {
+            if (!_secrets.TryGetValue(id, out var secret) || !secret.OneTimeOpen || secret.OpenedAt is not null || secret.ExpiresAt <= now)
+                return Task.FromResult(false);
+            _secrets[id] = secret with { OpenedAt = now };
+            return Task.FromResult(true);
+        }
+    }
+
     public Task<StoredSecret?> GetForRevocationAsync(string id, string revokeTokenHash, CancellationToken cancellationToken = default)
     {
         lock (_gate)
@@ -412,6 +424,11 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
                 CREATE INDEX IF NOT EXISTS ix_email_verification_outbox_due ON email_verification_outbox (lease_until, id);
                 CREATE INDEX IF NOT EXISTS ix_email_verification_outbox_expires ON email_verification_outbox (expires_at);
                 """
+            ,
+            [11] = """
+                ALTER TABLE secrets ADD COLUMN IF NOT EXISTS one_time_open boolean NOT NULL DEFAULT false;
+                ALTER TABLE secrets ADD COLUMN IF NOT EXISTS opened_at timestamptz;
+                """
         };
         foreach (var (version, sql) in migrations.OrderBy(pair => pair.Key))
         {
@@ -445,7 +462,7 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
             return null;
         }
 
-        await using var command = new NpgsqlCommand("INSERT INTO secrets (id, expires_at, protocol_version, nonce, blob_id, password_salt, message_outer_nonce, ciphertext_size, files_json, revoke_token_hash, email_address) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT DO NOTHING", connection, transaction);
+        await using var command = new NpgsqlCommand("INSERT INTO secrets (id, expires_at, protocol_version, nonce, blob_id, password_salt, message_outer_nonce, ciphertext_size, files_json, revoke_token_hash, email_address, one_time_open, opened_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT DO NOTHING", connection, transaction);
         command.Parameters.AddWithValue(secret.Id);
         command.Parameters.AddWithValue(secret.ExpiresAt.UtcDateTime);
         command.Parameters.AddWithValue(1);
@@ -457,6 +474,8 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
         command.Parameters.AddWithValue(System.Text.Json.JsonSerializer.Serialize(secret.Files, InfrastructureJsonContext.Default.IReadOnlyListStoredFile));
         command.Parameters.AddWithValue((object?)secret.RevokeTokenHash ?? DBNull.Value);
         command.Parameters.AddWithValue((object?)secret.EmailAddress ?? DBNull.Value);
+        command.Parameters.AddWithValue(secret.OneTimeOpen);
+        command.Parameters.AddWithValue((object?)secret.OpenedAt?.UtcDateTime ?? DBNull.Value);
         var created = await command.ExecuteNonQueryAsync(cancellationToken) == 1;
         if (created && auditRequestId is { } requestId)
             await FinishAuditInTransactionAsync(connection, transaction, requestId, 201, "success", null, cancellationToken);
@@ -468,18 +487,28 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
     {
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using var command = new NpgsqlCommand("SELECT id, expires_at, protocol_version, nonce, blob_id, password_salt, message_outer_nonce, ciphertext_size, files_json, email_address FROM secrets WHERE id = $1 AND expires_at > $2", connection);
+        await using var command = new NpgsqlCommand("SELECT id, expires_at, protocol_version, nonce, blob_id, password_salt, message_outer_nonce, ciphertext_size, files_json, email_address, one_time_open, opened_at FROM secrets WHERE id = $1 AND expires_at > $2", connection);
         command.Parameters.AddWithValue(id);
         command.Parameters.AddWithValue(now.UtcDateTime);
         await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow, cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? Read(reader) : null;
     }
 
+    public async Task<bool> TryConsumeOneTimeOpenAsync(string id, DateTimeOffset now, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = new NpgsqlCommand("UPDATE secrets SET opened_at = $2 WHERE id = $1 AND one_time_open = TRUE AND opened_at IS NULL AND expires_at > $2", connection);
+        command.Parameters.AddWithValue(id);
+        command.Parameters.AddWithValue(now.UtcDateTime);
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+    }
+
     public async Task<StoredSecret?> GetForRevocationAsync(string id, string revokeTokenHash, CancellationToken cancellationToken = default)
     {
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using var command = new NpgsqlCommand("SELECT id, expires_at, protocol_version, nonce, blob_id, password_salt, message_outer_nonce, ciphertext_size, files_json, email_address, revoke_token_hash FROM secrets WHERE id = $1 AND revoke_token_hash = $2", connection);
+        await using var command = new NpgsqlCommand("SELECT id, expires_at, protocol_version, nonce, blob_id, password_salt, message_outer_nonce, ciphertext_size, files_json, email_address, revoke_token_hash, one_time_open, opened_at FROM secrets WHERE id = $1 AND revoke_token_hash = $2", connection);
         command.Parameters.AddWithValue(id);
         command.Parameters.AddWithValue(revokeTokenHash);
         await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow, cancellationToken);
@@ -554,7 +583,7 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
         await connection.OpenAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         StoredSecret? secret;
-        await using (var select = new NpgsqlCommand("SELECT id, expires_at, protocol_version, nonce, blob_id, password_salt, message_outer_nonce, ciphertext_size, files_json, email_address, revoke_token_hash FROM secrets WHERE id=$1 AND revoke_token_hash=$2 FOR UPDATE", connection, transaction))
+        await using (var select = new NpgsqlCommand("SELECT id, expires_at, protocol_version, nonce, blob_id, password_salt, message_outer_nonce, ciphertext_size, files_json, email_address, revoke_token_hash, one_time_open, opened_at FROM secrets WHERE id=$1 AND revoke_token_hash=$2 FOR UPDATE", connection, transaction))
         {
             select.Parameters.AddWithValue(id);
             select.Parameters.AddWithValue(revokeTokenHash);
@@ -600,7 +629,7 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
         var result = new List<StoredSecret>();
         await using var connection = new NpgsqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using var command = new NpgsqlCommand("SELECT id, expires_at, protocol_version, nonce, blob_id, password_salt, message_outer_nonce, ciphertext_size, files_json, email_address FROM secrets WHERE expires_at <= $1 ORDER BY expires_at LIMIT $2", connection);
+        await using var command = new NpgsqlCommand("SELECT id, expires_at, protocol_version, nonce, blob_id, password_salt, message_outer_nonce, ciphertext_size, files_json, email_address, one_time_open, opened_at FROM secrets WHERE expires_at <= $1 ORDER BY expires_at LIMIT $2", connection);
         command.Parameters.AddWithValue(now.UtcDateTime);
         command.Parameters.AddWithValue(batchSize);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -617,17 +646,24 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static StoredSecret Read(NpgsqlDataReader reader) => new(
-        reader.GetString(0),
-        new DateTimeOffset(reader.GetDateTime(1), TimeSpan.Zero),
-        reader.IsDBNull(3) ? null : reader.GetString(3),
-        reader.IsDBNull(4) ? null : reader.GetString(4),
-        reader.GetInt64(7),
-        System.Text.Json.JsonSerializer.Deserialize(reader.GetString(8), InfrastructureJsonContext.Default.ListStoredFile) ?? [],
-        reader.IsDBNull(5) ? null : reader.GetString(5),
-        reader.IsDBNull(6) ? null : reader.GetString(6),
-        null,
-        reader.FieldCount > 9 && !reader.IsDBNull(9) ? reader.GetString(9) : null);
+    private static StoredSecret Read(NpgsqlDataReader reader)
+    {
+        var oneTimeOrdinal = reader.GetOrdinal("one_time_open");
+        var openedAtOrdinal = reader.GetOrdinal("opened_at");
+        return new StoredSecret(
+            reader.GetString(0),
+            new DateTimeOffset(reader.GetDateTime(1), TimeSpan.Zero),
+            reader.IsDBNull(3) ? null : reader.GetString(3),
+            reader.IsDBNull(4) ? null : reader.GetString(4),
+            reader.GetInt64(7),
+            System.Text.Json.JsonSerializer.Deserialize(reader.GetString(8), InfrastructureJsonContext.Default.ListStoredFile) ?? [],
+            reader.IsDBNull(5) ? null : reader.GetString(5),
+            reader.IsDBNull(6) ? null : reader.GetString(6),
+            null,
+            reader.FieldCount > 9 && !reader.IsDBNull(9) ? reader.GetString(9) : null,
+            reader.GetBoolean(oneTimeOrdinal),
+            reader.IsDBNull(openedAtOrdinal) ? null : new DateTimeOffset(reader.GetDateTime(openedAtOrdinal), TimeSpan.Zero));
+    }
 }
 
 internal sealed class StorageHealth(IEnumerable<IInfrastructureHealthCheck> healthChecks) : IStorageReadiness
