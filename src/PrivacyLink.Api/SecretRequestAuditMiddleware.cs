@@ -6,7 +6,7 @@ using PrivacyLink.Services;
 
 namespace PrivacyLink.Api;
 
-internal sealed class SecretRequestAuditMiddleware(IConfiguration configuration, ISecretRequestAuditWriter writer) : IMiddleware
+internal sealed class SecretRequestAuditMiddleware(IConfiguration configuration, ISecretRequestAuditWriter writer, ILogger<SecretRequestAuditMiddleware> logger) : IMiddleware
 {
     private readonly int _maxRequestBytes = int.TryParse(configuration["Limits:MaxRequestBytes"], out var configuredRequestBytes) && configuredRequestBytes > 0
         ? configuredRequestBytes
@@ -75,27 +75,68 @@ internal sealed class SecretRequestAuditMiddleware(IConfiguration configuration,
                 context.Response.StatusCode = failure.StatusCode;
                 await context.Response.WriteAsJsonAsync(new ErrorResponse(failure.ErrorCode), PrivacyLinkJsonContext.Default.ErrorResponse, cancellationToken: CancellationToken.None);
             }
-            var status = context.Response.StatusCode;
-            var finish = new SecretRequestAuditFinish(DateTimeOffset.UtcNow, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
-                context.RequestAborted.IsCancellationRequested ? "aborted" : "completed",
-                context.RequestAborted.IsCancellationRequested ? "aborted" : status >= 500 ? "error" : status >= 400 ? "rejected" : "success",
-                status, PrivacyAudit.AuditErrorCode(status,
-                    context.Items.TryGetValue(PrivacyAudit.ErrorCodeItem, out var errorCode) ? errorCode as string : null));
-            try
+            var deferAuditUntilAfterDrain = SecretResponseDrain.HasPendingCleanup(context);
+            if (!deferAuditUntilAfterDrain)
             {
-                await writer.FinishAsync(requestId, finish, CancellationToken.None);
-            }
-            catch
-            {
-                context.Response.Body = originalBody;
-                context.Response.Clear();
-                context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                await context.Response.WriteAsJsonAsync(new ErrorResponse("audit_unavailable"), PrivacyLinkJsonContext.Default.ErrorResponse, cancellationToken: CancellationToken.None);
-                return;
+                var statusBeforeDrain = context.Response.StatusCode;
+                var finishBeforeDrain = new SecretRequestAuditFinish(DateTimeOffset.UtcNow, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
+                    context.RequestAborted.IsCancellationRequested ? "aborted" : "completed",
+                    context.RequestAborted.IsCancellationRequested ? "aborted" : statusBeforeDrain >= 500 ? "error" : statusBeforeDrain >= 400 ? "rejected" : "success",
+                    statusBeforeDrain, PrivacyAudit.AuditErrorCode(statusBeforeDrain,
+                        context.Items.TryGetValue(PrivacyAudit.ErrorCodeItem, out var errorCode) ? errorCode as string : null));
+                try { await writer.FinishAsync(requestId, finishBeforeDrain, CancellationToken.None); }
+                catch
+                {
+                    context.Response.Body = originalBody;
+                    context.Response.Clear();
+                    context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                    await context.Response.WriteAsJsonAsync(new ErrorResponse("audit_unavailable"), PrivacyLinkJsonContext.Default.ErrorResponse, cancellationToken: CancellationToken.None);
+                    return;
+                }
             }
 
             context.Response.Body = originalBody;
-            await responseBuffer.DrainBufferAsync(originalBody, CancellationToken.None);
+            try
+            {
+                await responseBuffer.DrainBufferAsync(originalBody, CancellationToken.None);
+                SecretResponseDrain.MarkSucceeded(context);
+            }
+            catch (Exception exception)
+            {
+                if (deferAuditUntilAfterDrain)
+                {
+                    var aborted = context.RequestAborted.IsCancellationRequested;
+                    var failure = PrivacyAudit.Failure(exception);
+                    var failedFinish = new SecretRequestAuditFinish(DateTimeOffset.UtcNow, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
+                        aborted ? "aborted" : "completed",
+                        aborted ? "aborted" : "error",
+                        aborted ? null : failure.StatusCode,
+                        aborted ? null : failure.ErrorCode);
+                    try { await writer.FinishAsync(requestId, failedFinish, CancellationToken.None); }
+                    catch (Exception auditException) { logger.LogError(auditException, "Failed to record secret response delivery failure for {RequestId}", requestId); }
+                }
+                throw;
+            }
+
+            if (deferAuditUntilAfterDrain)
+            {
+                var status = context.Response.StatusCode;
+                var finish = new SecretRequestAuditFinish(DateTimeOffset.UtcNow, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
+                    context.RequestAborted.IsCancellationRequested ? "aborted" : "completed",
+                    context.RequestAborted.IsCancellationRequested ? "aborted" : status >= 500 ? "error" : status >= 400 ? "rejected" : "success",
+                    status, PrivacyAudit.AuditErrorCode(status,
+                        context.Items.TryGetValue(PrivacyAudit.ErrorCodeItem, out var errorCode) ? errorCode as string : null));
+                try
+                {
+                    await writer.FinishAsync(requestId, finish, CancellationToken.None);
+                }
+                catch (Exception exception)
+                {
+                    logger.LogError(exception, "Failed to complete secret request audit for {RequestId} after response write", requestId);
+                }
+
+                await SecretResponseDrain.CompleteAsync(context);
+            }
         }
         finally
         {

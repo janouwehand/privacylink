@@ -16,8 +16,10 @@ import { SECRET_HISTORY_STORAGE, SecretHistoryStore } from './secret-history-sto
 import { installTestWebLocks } from '../../test-utils/web-locks';
 import { MemoryHistoryStorage } from '../../test-utils/memory-history-storage';
 import { decodeCanonical, decryptFile, decryptFileName, decryptMessage, encryptFile, encryptMessage } from './secret-crypto';
+import type { OpenedFile } from '../../../PrivacyLink.Client/src';
 
 class InlineCryptoWorker extends EventTarget {
+  private readonly cachedFiles = new Map<string, { filename: string; mimeType: string; data: Uint8Array }>();
   postMessage(message: { id: number; operation: string; payload: unknown; clientKey: string | Uint8Array }): void {
     void (async () => {
       let result: unknown;
@@ -26,13 +28,12 @@ class InlineCryptoWorker extends EventTarget {
       } else if (message.operation === 'decryptOpenSecretResponse') {
         const payload = JSON.parse(new TextDecoder().decode(message.payload as ArrayBuffer));
         const text = payload.message ? await decryptMessage(payload, message.clientKey as string) : null;
-        const files = await Promise.all(payload.files.map(async (file: Parameters<typeof decryptFileName>[0]) => ({
-          id: file.id,
-          extension: file.extension,
-          name: await decryptFileName(file, message.clientKey as string),
-          mimeType: file.mimeType,
-          size: file.size
-        })));
+        const files = await Promise.all(payload.files.map(async (file: OpenedFile) => {
+          const name = await decryptFileName(file, message.clientKey as string);
+          const data = await decryptFile(file, message.clientKey as string);
+          this.cachedFiles.set(file.id, { filename: name, mimeType: file.mimeType, data });
+          return { id: file.id, extension: file.extension, name, mimeType: file.mimeType, size: file.size };
+        }));
         result = { token: 'test-cache-token', message: text, files };
       } else if (message.operation === 'decryptOpenFileResponse') {
         const payload = JSON.parse(new TextDecoder().decode(message.payload as ArrayBuffer));
@@ -47,7 +48,13 @@ class InlineCryptoWorker extends EventTarget {
         for (const file of input.files) files.push(await encryptFile(file, message.clientKey as Uint8Array));
         result = new TextEncoder().encode(JSON.stringify({ ...input.request, files })).buffer;
       } else if (message.operation === 'clearCachedFiles') {
+        this.cachedFiles.clear();
         result = undefined;
+      } else if (message.operation === 'decryptCachedFile') {
+        const payload = message.payload as { fileId: string };
+        const file = this.cachedFiles.get(payload.fileId);
+        if (!file) throw new Error('Missing test file');
+        result = { filename: file.filename, mimeType: file.mimeType, data: file.data.slice().buffer };
       } else {
         throw new Error(`Unexpected worker operation: ${message.operation}`);
       }
@@ -269,6 +276,40 @@ describe('App', () => {
     expect(recipient.opened()).toBe(true);
   });
 
+  it('warns before and after a one-time opening and guards page exit', async () => {
+    const encrypted = await encryptMessage('One-time content');
+    const id = 'AAAAAAAAAAAAAAAAAAAAAA';
+    api.getMetadata.mockResolvedValue({ exists: true, protocolVersion: 1, expiresAt: '2030-01-01T00:00:00.000Z', passwordProtected: false, hasMessage: true, fileCount: 0, files: [], oneTimeOpen: true });
+    api.openRaw.mockResolvedValue(new TextEncoder().encode(JSON.stringify({ protocolVersion: 1, message: encrypted.message, files: [] })).buffer);
+    const fixture = await renderApp(`/s/${id}#${encrypted.clientKey}`);
+    const recipient = fixture.debugElement.query(By.directive(RecipientPage)).injector.get(RecipientState);
+    await vi.waitFor(() => expect(recipient.metadataReady()).toBe(true));
+    fixture.detectChanges();
+    expect((fixture.nativeElement as HTMLElement).querySelector('.one-time-warning')?.textContent).toContain('can be opened only once');
+
+    await recipient.open();
+    fixture.detectChanges();
+    expect((fixture.nativeElement as HTMLElement).querySelector('.one-time-warning')?.textContent).toContain('cannot retrieve the content again');
+    const beforeUnload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(beforeUnload);
+    expect(beforeUnload.defaultPrevented).toBe(true);
+
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const router = TestBed.inject(Router);
+    expect(await router.navigateByUrl('/security')).toBe(false);
+    expect(confirm).toHaveBeenCalledOnce();
+    confirm.mockReturnValue(true);
+    expect(await router.navigateByUrl('/security')).toBe(true);
+    fixture.destroy();
+  });
+
+  it('renders a consumed one-time secret as unavailable during metadata loading', async () => {
+    api.getMetadata.mockResolvedValue({ exists: true, protocolVersion: 1, expiresAt: '2030-01-01T00:00:00.000Z', passwordProtected: false, hasMessage: true, fileCount: 0, files: [], oneTimeOpen: true, oneTimeOpened: true });
+    const fixture = await renderApp('/s/AAAAAAAAAAAAAAAAAAAAAA#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+    await vi.waitFor(() => expect(fixture.nativeElement.querySelector('main')?.textContent?.trim()).toBe('This link is unavailable.'));
+    expect((fixture.nativeElement as HTMLElement).querySelector('.recipient-card button, .recipient-card input')).toBeNull();
+  });
+
   it('shows only the localized unavailable message for a malformed recipient link', async () => {
     const fixture = await renderApp('/s/not-valid#broken');
     const main = (fixture.nativeElement as HTMLElement).querySelector('main')!;
@@ -343,6 +384,41 @@ describe('App', () => {
     const main = (fixture.nativeElement as HTMLElement).querySelector('main')!;
     expect(main.textContent).toContain('The service is busy. Please try again in a few moments.');
     expect(main.textContent).not.toContain('This link is unavailable.');
+  });
+
+  it.each([
+    ['network failure', new TypeError('Failed to fetch')],
+    ['HTTP 500', new SecretApiError(500, null, 'server_error')]
+  ])('warns against retrying after a one-time opening delivery failure (%s)', async (_label, failure) => {
+    api.getMetadata.mockResolvedValue({ exists: true, protocolVersion: 1, expiresAt: '2030-01-01T00:00:00.000Z', passwordProtected: false, hasMessage: true, fileCount: 0, files: [], oneTimeOpen: true });
+    api.openRaw.mockRejectedValueOnce(failure);
+    const fixture = await renderApp(`/s/AAAAAAAAAAAAAAAAAAAAAA#${'A'.repeat(43)}`);
+    const recipient = fixture.debugElement.query(By.directive(RecipientPage)).injector.get(RecipientState);
+    await vi.waitFor(() => expect(recipient.metadataReady()).toBe(true));
+
+    await recipient.open();
+    fixture.detectChanges();
+
+    const main = (fixture.nativeElement as HTMLElement).querySelector('main')!;
+    expect(main.textContent).toContain('Do not retry this link; ask the sender for a new one.');
+    expect(main.textContent).not.toContain('Please try again in a few moments.');
+  });
+
+  it('keeps the known pre-claim password-capacity 503 retryable for one-time secrets', async () => {
+    api.getMetadata.mockResolvedValue({ exists: true, protocolVersion: 1, expiresAt: '2030-01-01T00:00:00.000Z', passwordProtected: true, hasMessage: true, fileCount: 0, files: [], oneTimeOpen: true });
+    api.unlockRaw.mockRejectedValueOnce(new SecretApiError(503, null, 'temporarily_unavailable'));
+    const fixture = await renderApp(`/s/AAAAAAAAAAAAAAAAAAAAAA#${'A'.repeat(43)}`);
+    const recipient = fixture.debugElement.query(By.directive(RecipientPage)).injector.get(RecipientState);
+    await vi.waitFor(() => expect(recipient.metadataReady()).toBe(true));
+    recipient.unlockPassword.set('test-pin');
+
+    await recipient.open();
+    fixture.detectChanges();
+
+    expect(api.unlockRaw).toHaveBeenCalledOnce();
+    const main = (fixture.nativeElement as HTMLElement).querySelector('main')!;
+    expect(main.textContent).toContain('The service is busy. Please try again in a few moments.');
+    expect(main.textContent).not.toContain('Do not retry this link');
   });
 
   it('keeps incorrect-password, email-verification, and rate-limit responses distinct', async () => {
@@ -538,7 +614,7 @@ describe('App', () => {
     expect(localStorage.getItem(`privacylink.email-verification.${nextId}`)).toBeNull();
   });
 
-  it('keeps metadata files visible when the unprotected open response only contains the message', async () => {
+  it('downloads attachments from the full open response without a later file request', async () => {
     const encrypted = await encryptMessage('Message with files');
     const key = decodeCanonical(encrypted.clientKey, 32);
     const encryptedFiles = await Promise.all([
@@ -558,11 +634,7 @@ describe('App', () => {
     api.openRaw.mockResolvedValue(new TextEncoder().encode(JSON.stringify({
       protocolVersion: 1,
       message: encrypted.message,
-      files: []
-    })).buffer);
-    api.openFileRaw.mockResolvedValue(new TextEncoder().encode(JSON.stringify({
-      protocolVersion: 1,
-      file: encryptedFiles[0]
+      files: encryptedFiles
     })).buffer);
     const fixture = await renderApp(`/s/${id}#${encrypted.clientKey}`);
     const recipient = fixture.debugElement.query(By.directive(RecipientPage)).injector.get(RecipientState);
@@ -576,7 +648,7 @@ describe('App', () => {
     const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
     await recipient.download(recipient.metadataFiles()[0]!);
     anchorClick.mockRestore();
-    expect(api.openFileRaw).toHaveBeenCalledWith(id, encryptedFiles[0]!.id);
+    expect(api.openFileRaw).not.toHaveBeenCalled();
   });
 
   it('renders the security and not-found routes with matching titles and focus', async () => {
@@ -632,7 +704,7 @@ describe('App', () => {
     const securityDisclosure = compiled.querySelector<HTMLDetailsElement>('[data-testid="security-disclosure"]')!;
 
     expect(securityDisclosure.open).toBe(false);
-    expect(compiled.querySelector('.security-disclosure-status')?.textContent).toContain('Not configured');
+    expect(compiled.querySelector('.security-disclosure-status')?.textContent).toContain('One-time opening set');
     expect(compiled.querySelector('.security-status-summary')).toBeNull();
     expect(compiled.querySelector('#expiry')).not.toBeNull();
     expect(compiled.querySelector('#access-code-input')?.closest('dialog')?.open).toBe(false);
@@ -640,6 +712,10 @@ describe('App', () => {
 
     securityDisclosure.open = true;
     fixture.detectChanges();
+    expect(compiled.querySelector('.security-disclosure-content .security-option h3')?.textContent).toContain('One-time opening');
+    expect(create.oneTimeOpenEnabled()).toBe(true);
+    expect(compiled.querySelector<HTMLButtonElement>('[data-testid="one-time-open-action"]')?.textContent).toContain('Remove');
+    expect(compiled.querySelector('.security-disclosure-content .security-option h3')?.textContent).toContain('One-time opening');
     compiled.querySelector<HTMLButtonElement>('[data-testid="access-code-action"]')!.click();
     fixture.detectChanges();
     let accessCodeDialog = compiled.querySelector<HTMLDialogElement>('#access-code-title')!.closest('dialog')!;
@@ -680,8 +756,8 @@ describe('App', () => {
     accessCodeDialog.querySelector<HTMLButtonElement>('.dialog-actions .primary')!.click();
     fixture.detectChanges();
     expect(create.password()).toBe(accessCode);
-    expect(compiled.querySelector('.security-option-summary')?.textContent).toContain('Access code set');
-    expect(compiled.querySelector('.security-disclosure-status')?.textContent).toContain('Access code set');
+    expect(compiled.querySelector('[data-testid="access-code-action"]')?.closest('.security-option')?.textContent).toContain('Access code set');
+    expect(compiled.querySelector('.security-disclosure-status')?.textContent).toContain('One-time opening and access code set');
     const accessCodeAction = compiled.querySelector<HTMLButtonElement>('[data-testid="access-code-action"]')!;
     expect(accessCodeAction.textContent).toContain('Remove');
     expect(accessCodeAction.getAttribute('aria-label')).toBe('Remove access code');
@@ -729,7 +805,7 @@ describe('App', () => {
     compiled.querySelector<HTMLFormElement>('.email-verification-form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
     fixture.detectChanges();
     expect(create.emailVerificationEnabled()).toBe(true);
-    expect(compiled.querySelector('.security-disclosure-status')?.textContent).toContain('Both options set');
+    expect(compiled.querySelector('.security-disclosure-status')?.textContent).toContain('All options set');
     const emailVerificationAction = compiled.querySelector<HTMLButtonElement>('[data-testid="email-verification-action"]')!;
     expect(emailVerificationAction.textContent).toContain('Remove');
     expect(emailVerificationAction.getAttribute('aria-label')).toBe('Remove email verification');
@@ -757,7 +833,7 @@ describe('App', () => {
     fixture.detectChanges();
 
     const request = api.create.mock.calls[0]?.[0];
-    expect(request).toEqual(expect.objectContaining({ emailAddress: 'recipient@example.com', password: expect.any(String) }));
+    expect(request).toEqual(expect.objectContaining({ emailAddress: 'recipient@example.com', password: expect.any(String), oneTimeOpen: true }));
     expect(create.password()).toBe('');
     expect(create.resultAccessCode()).toBe(accessCode);
     expect(compiled.querySelector<HTMLInputElement>('#result-access-code')?.value).toBe(accessCode);

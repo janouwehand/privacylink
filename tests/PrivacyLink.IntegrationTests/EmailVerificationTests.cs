@@ -368,7 +368,38 @@ public sealed class EmailVerificationTests
         Assert.Contains("AAAAAAAAAAAAAAAAAAAAAAA", await correctPassword.Content.ReadAsStringAsync(), StringComparison.Ordinal);
     }
 
-    private static Task<HttpResponseMessage> CreateAsync(EmailVerificationTestHost host, string? emailAddress = null, string? password = null, bool includeFile = false)
+    [Fact]
+    public async Task EmailChecksAndWrongCodesDoNotConsumeOneTimeOpening()
+    {
+        using var host = EmailVerificationTestHost.Create(storeAvailable: true);
+        using var created = await CreateAsync(host, Email, oneTimeOpen: true);
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        host.Store.RegisterSecret(id, Email);
+
+        using var blockedOpen = await host.Client.PostAsync($"/api/v1/secrets/{id}/open", null);
+        await AssertEmailVerificationRequiredAsync(blockedOpen);
+
+        using var requested = await host.Client.PostAsync($"/api/v1/secrets/{id}/email-verification/request", null);
+        Assert.Equal(HttpStatusCode.Accepted, requested.StatusCode);
+        await host.Store.WaitForActivationAsync(id).WaitAsync(TimeSpan.FromSeconds(5));
+        var correctCode = host.Sender.LastCode!;
+        var wrongCode = correctCode == "000000" ? "000001" : "000000";
+        using var invalid = await host.Client.PostAsJsonAsync($"/api/v1/secrets/{id}/email-verification/verify", new { code = wrongCode });
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+        var notConsumed = await host.Client.GetFromJsonAsync<JsonElement>($"/api/v1/secrets/{id}");
+        Assert.False(notConsumed.GetProperty("oneTimeOpened").GetBoolean());
+
+        using var verified = await host.Client.PostAsJsonAsync($"/api/v1/secrets/{id}/email-verification/verify", new { code = correctCode });
+        Assert.Equal(HttpStatusCode.NoContent, verified.StatusCode);
+        var cookie = verified.Headers.GetValues("Set-Cookie").Single().Split(';', 2)[0];
+        using var opened = await PostWithCookieAsync(host.Client, $"/api/v1/secrets/{id}/open", cookie);
+        Assert.Equal(HttpStatusCode.OK, opened.StatusCode);
+        using var replay = await PostWithCookieAsync(host.Client, $"/api/v1/secrets/{id}/open", cookie);
+        Assert.Equal(HttpStatusCode.NotFound, replay.StatusCode);
+    }
+
+    private static Task<HttpResponseMessage> CreateAsync(EmailVerificationTestHost host, string? emailAddress = null, string? password = null, bool includeFile = false, bool oneTimeOpen = false)
     {
         var payload = new Dictionary<string, object?>
         {
@@ -381,6 +412,7 @@ public sealed class EmailVerificationTests
         };
         if (emailAddress is not null) payload["emailAddress"] = emailAddress;
         if (password is not null) payload["password"] = password;
+        if (oneTimeOpen) payload["oneTimeOpen"] = true;
         return CreateProofTestHelper.CreateAsync(host.Client, payload);
     }
 

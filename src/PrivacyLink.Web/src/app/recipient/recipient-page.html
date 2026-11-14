@@ -19,6 +19,7 @@
       <p>{{ language.t('loading') }}</p>
     } @else if (recipient.metadataReady()) {
       <p class="recipient-expiry">{{ language.t('expires') }} {{ recipient.expiresAt() | date:'medium':undefined:language.dateLocale() }}</p>
+      @if (recipient.oneTimeOpen() && !recipient.opened()) { <p class="field-note one-time-warning" role="note">{{ language.t('oneTimeOpenBefore') }}</p> }
       @if (recipient.emailVerificationRequired() && recipient.passwordProtected()) { <p class="field-note recipient-security-requirements">{{ language.t('bothSecurityRequirements') }}</p> }
 
       @if (!recipient.opened()) {
@@ -68,6 +69,7 @@
         @if (!recipient.passwordProtected() && recipient.error().length) { <p class="error" role="alert">{{ recipient.errorText() }}</p> }
       }
       } @else {
+        @if (recipient.oneTimeOpen()) { <p class="field-note one-time-warning" role="note">{{ language.t('oneTimeOpenAfter') }}</p> }
         <div class="opened-content-grid" [class.has-message]="!!recipient.openedMessage()" [class.has-files]="recipient.metadataFiles().length > 0">
         @if (recipient.openedMessage()) {
           <section class="opened-message-section">

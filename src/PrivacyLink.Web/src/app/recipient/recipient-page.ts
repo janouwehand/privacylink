@@ -1,6 +1,6 @@
 import { AfterViewInit, Component, DestroyRef, ElementRef, inject, OnDestroy, OnInit, ViewChild } from '@angular/core';
 import { DatePipe } from '@angular/common';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, CanDeactivateFn } from '@angular/router';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { combineLatest } from 'rxjs';
 import { AppState } from '../app-state';
@@ -44,6 +44,7 @@ export class RecipientPage implements OnInit, AfterViewInit, OnDestroy {
   }
 
   ngOnInit(): void {
+    window.addEventListener('beforeunload', this.handleBeforeUnload);
     combineLatest([this.route.paramMap, this.route.fragment])
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe(([params, fragment]) => {
@@ -51,6 +52,16 @@ export class RecipientPage implements OnInit, AfterViewInit, OnDestroy {
         this.recipient.initialize(params.get('id'), fragment ?? '');
       });
   }
+
+  canLeaveRecipient(): boolean {
+    return !this.recipient.oneTimeOpen() || !this.recipient.opened() || window.confirm(this.language.t('oneTimeLeaveConfirm'));
+  }
+
+  private readonly handleBeforeUnload = (event: BeforeUnloadEvent): void => {
+    if (!this.recipient.oneTimeOpen() || !this.recipient.opened()) return;
+    event.preventDefault();
+    event.returnValue = '';
+  };
 
   ngAfterViewInit(): void { document.getElementById('page-title')?.focus(); }
 
@@ -66,5 +77,7 @@ export class RecipientPage implements OnInit, AfterViewInit, OnDestroy {
     await this.recipient.verifyEmailCode();
   }
 
-  ngOnDestroy(): void { this.recipient.leave(); }
+  ngOnDestroy(): void { window.removeEventListener('beforeunload', this.handleBeforeUnload); this.recipient.leave(); }
 }
+
+export const recipientLeaveGuard: CanDeactivateFn<RecipientPage> = component => component.canLeaveRecipient();

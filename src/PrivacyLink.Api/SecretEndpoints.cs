@@ -42,7 +42,7 @@ internal static class SecretEndpoints
             using var document = await JsonDocument.ParseAsync(request.Body, new JsonDocumentOptions { MaxDepth = 6 }, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object || !KnownOnly(root, "protocolVersion", "expiry", "message", "files", "password", "emailAddress") ||
+            if (root.ValueKind != JsonValueKind.Object || !KnownOnly(root, "protocolVersion", "expiry", "message", "files", "password", "emailAddress", "oneTimeOpen") ||
                 !root.TryGetProperty("protocolVersion", out var version) || version.GetInt32() != 1 ||
                 !root.TryGetProperty("expiry", out var expiry) || expiry.ValueKind != JsonValueKind.String || !Expiries.Contains(expiry.GetString()!) ||
                 !root.TryGetProperty("files", out var files) || files.ValueKind != JsonValueKind.Array || files.GetArrayLength() > maxFiles)
@@ -64,6 +64,13 @@ internal static class SecretEndpoints
                 if (emailValue.ValueKind != JsonValueKind.String || !EmailAddress.TryNormalize(emailValue.GetString(), out var normalizedEmail))
                     return Error(400, "invalid_request");
                 emailAddress = normalizedEmail;
+            }
+
+            var oneTimeOpen = false;
+            if (root.TryGetProperty("oneTimeOpen", out var oneTimeValue))
+            {
+                if (oneTimeValue.ValueKind is not JsonValueKind.True and not JsonValueKind.False) return Error(400, "invalid_request");
+                oneTimeOpen = oneTimeValue.GetBoolean();
             }
 
             SecretCreateMessage? message = null;
@@ -98,7 +105,7 @@ internal static class SecretEndpoints
             cancellationToken.ThrowIfCancellationRequested();
             var preGeneratedId = context.Items.TryGetValue(PrivacyAudit.CreateSecretIdItem, out var value) ? value as string : null;
             var auditRequestId = context.Items.TryGetValue(PrivacyAudit.RequestIdItem, out var requestId) && requestId is Guid id ? id : (Guid?)null;
-            var created = await service.CreateAsync(new CreateSecretCommand(expiry.GetString()!, message, parsedFiles, password, preGeneratedId, auditRequestId, emailAddress), cancellationToken);
+            var created = await service.CreateAsync(new CreateSecretCommand(expiry.GetString()!, message, parsedFiles, password, preGeneratedId, auditRequestId, emailAddress, oneTimeOpen), cancellationToken);
             if (created is null) return Error(429, "rate_limited");
             return Results.Json(new CreateSecretResponse(created.Id, created.ExpiresAt, created.PasswordProtected, created.RevokeToken), PrivacyLinkJsonContext.Default.CreateSecretResponse, statusCode: 201);
         }
@@ -125,7 +132,7 @@ internal static class SecretEndpoints
             : secret.Files.Select(Metadata).ToArray();
         return Results.Json(new SecretMetadataResponse(true, 1, secret.ExpiresAt, secret.PasswordProtected, secret.MessageNonce is not null, secret.Files.Count, metadata,
             secret.EmailAddress is not null,
-            secret.EmailAddress is null ? null : EmailVerificationService.MaskAddress(secret.EmailAddress)), PrivacyLinkJsonContext.Default.SecretMetadataResponse);
+            secret.EmailAddress is null ? null : EmailVerificationService.MaskAddress(secret.EmailAddress), secret.OneTimeOpen, secret.OneTimeOpen && secret.OpenedAt is not null), PrivacyLinkJsonContext.Default.SecretMetadataResponse);
     }
 
     public static async Task<IResult> RequestEmailCode(string id, HttpRequest request, EmailVerificationService verification)
@@ -241,7 +248,7 @@ internal static class SecretEndpoints
         catch (JsonException) { return Error(400, "invalid_request"); }
     }
 
-    public static async Task<IResult> Open(string id, HttpRequest request, SecretApplicationService service, TimeProvider clock, EmailVerificationService verification, IWebHostEnvironment environment)
+    public static async Task<IResult> Open(string id, HttpRequest request, SecretApplicationService service, TimeProvider clock, EmailVerificationService verification, IWebHostEnvironment environment, ILoggerFactory loggerFactory)
     {
         if (request.ContentLength is > 0 || request.Headers.ContainsKey("Transfer-Encoding")) return Error(400, "invalid_request");
         if (!ValidId(id)) return Error(404, "not_found");
@@ -254,13 +261,17 @@ internal static class SecretEndpoints
             MessageCiphertext? message = opened.MessageNonce is not null && opened.MessageCiphertext is not null
                 ? new MessageCiphertext(opened.MessageNonce, Encode(opened.MessageCiphertext))
                 : null;
-            return Results.Json(new OpenSecretResponse(1, message, []), PrivacyLinkJsonContext.Default.OpenSecretResponse);
+            var files = opened.Files.Select(file => OpenedFile(file.File, Encode(file.Ciphertext))).ToArray();
+            IResult response = Results.Json(new OpenSecretResponse(1, message, files), PrivacyLinkJsonContext.Default.OpenSecretResponse);
+            return opened.OneTimeOpen
+                ? new OneTimeOpenCleanupResult(response, service, id, loggerFactory.CreateLogger("OneTimeOpenCleanup"))
+                : response;
         }
         catch (SecretProtectedException) { return Error(403, "forbidden"); }
         catch (FileNotFoundException) { return Error(404, "not_found"); }
     }
 
-    public static async Task<IResult> Unlock(string id, HttpRequest request, SecretApplicationService service, TimeProvider clock, IConfiguration configuration, EmailVerificationService verification, IWebHostEnvironment environment)
+    public static async Task<IResult> Unlock(string id, HttpRequest request, SecretApplicationService service, TimeProvider clock, IConfiguration configuration, EmailVerificationService verification, IWebHostEnvironment environment, ILoggerFactory loggerFactory)
     {
         var cancellationToken = request.HttpContext.RequestAborted;
         var maxAttempts = BoundedLimit(configuration, "Security:UnlockAttempts:MaxPerWindow", 5, 1, 100);
@@ -289,7 +300,10 @@ internal static class SecretEndpoints
                 ? new MessageCiphertext(result.MessageNonce, Encode(result.MessageCiphertext))
                 : null;
             var files = result.Files.Select(file => OpenedFile(file.File, Encode(file.Ciphertext))).ToArray();
-            return Results.Json(new OpenSecretResponse(1, message, files), PrivacyLinkJsonContext.Default.OpenSecretResponse);
+            IResult response = Results.Json(new OpenSecretResponse(1, message, files), PrivacyLinkJsonContext.Default.OpenSecretResponse);
+            return result.OneTimeOpen
+                ? new OneTimeOpenCleanupResult(response, service, id, loggerFactory.CreateLogger("OneTimeOpenCleanup"))
+                : response;
         }
         catch (PasswordEnvelopeCapacityException)
         {

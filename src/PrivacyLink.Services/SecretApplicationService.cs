@@ -5,11 +5,11 @@ namespace PrivacyLink.Services;
 
 public sealed record SecretCreateMessage(string Nonce, byte[] Ciphertext);
 public sealed record SecretCreateFile(string Id, string Extension, string NameNonce, string NameCiphertext, string MimeType, long Size, string Nonce, byte[] Ciphertext);
-public sealed record CreateSecretCommand(string Expiry, SecretCreateMessage? Message, IReadOnlyList<SecretCreateFile> Files, string? Password, string? SecretId = null, Guid? AuditRequestId = null, string? EmailAddress = null);
+public sealed record CreateSecretCommand(string Expiry, SecretCreateMessage? Message, IReadOnlyList<SecretCreateFile> Files, string? Password, string? SecretId = null, Guid? AuditRequestId = null, string? EmailAddress = null, bool OneTimeOpen = false);
 public sealed record CreatedSecret(string Id, DateTimeOffset ExpiresAt, bool PasswordProtected, string RevokeToken);
-public sealed record SecretOpenData(string? MessageNonce, byte[]? MessageCiphertext);
+public sealed record SecretOpenData(string? MessageNonce, byte[]? MessageCiphertext, IReadOnlyList<OpenedFileData> Files, bool OneTimeOpen);
 public sealed record OpenedFileData(StoredFile File, byte[] Ciphertext);
-public sealed record SecretUnlockData(string? MessageNonce, byte[]? MessageCiphertext, IReadOnlyList<OpenedFileData> Files);
+public sealed record SecretUnlockData(string? MessageNonce, byte[]? MessageCiphertext, IReadOnlyList<OpenedFileData> Files, bool OneTimeOpen);
 
 public sealed class SecretProtectedException : Exception { }
 public sealed class EmailAddressInvalidException : Exception { }
@@ -93,7 +93,8 @@ public sealed class SecretApplicationService(
                 passwordSession is null ? null : Encode(passwordSession.Salt),
                 messageOuterNonce,
                 revokeTokenHash,
-                normalizedEmail);
+                normalizedEmail,
+                command.OneTimeOpen);
             cancellationToken.ThrowIfCancellationRequested();
             if (await repository.CreateAsync(secret, command.AuditRequestId, cancellationToken) is null)
             {
@@ -139,16 +140,38 @@ public sealed class SecretApplicationService(
         return true;
     }
 
+    public async Task<bool> CleanupConsumedOneTimeAsync(string id, CancellationToken cancellationToken = default)
+    {
+        var secret = await repository.GetConsumedOneTimeAsync(id, cancellationToken);
+        if (secret is null) return false;
+
+        var blobIds = secret.Files.Select(file => file.BlobId)
+            .Append(secret.MessageBlobId)
+            .OfType<string>()
+            .Distinct(StringComparer.Ordinal);
+        foreach (var blobId in blobIds)
+            await blobs.DeleteAsync(secret.Id, blobId, cancellationToken);
+
+        return await repository.DeleteConsumedOneTimeAsync(id, cancellationToken);
+    }
+
     public async Task<SecretOpenData?> OpenAsync(string id, DateTimeOffset now, CancellationToken cancellationToken = default)
     {
         var secret = await repository.GetAsync(id, now, cancellationToken);
         if (secret is null) return null;
         if (secret.PasswordProtected) throw new SecretProtectedException();
+        if (secret.OneTimeOpen && !await repository.TryConsumeOneTimeOpenAsync(id, now, cancellationToken)) return null;
 
         byte[]? messageCiphertext = null;
         if (secret.MessageBlobId is not null && secret.MessageNonce is not null)
-            messageCiphertext = await blobs.ReadAsync(secret.Id, secret.MessageBlobId);
-        return new SecretOpenData(secret.MessageNonce, messageCiphertext);
+            messageCiphertext = await blobs.ReadAsync(secret.Id, secret.MessageBlobId, cancellationToken);
+        var files = new List<OpenedFileData>(secret.Files.Count);
+        foreach (var file in secret.Files)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            files.Add(new OpenedFileData(file, await blobs.ReadAsync(secret.Id, file.BlobId, cancellationToken)));
+        }
+        return new SecretOpenData(secret.MessageNonce, messageCiphertext, files, secret.OneTimeOpen);
     }
 
     public async Task<StoredSecret?> GetUnlockTargetAsync(string id, DateTimeOffset now, CancellationToken cancellationToken = default)
@@ -181,6 +204,8 @@ public sealed class SecretApplicationService(
         using var session = await envelopes.OpenSessionAsync(password, salt, cancellationToken, beforeKdf: ReserveAttempt);
         cancellationToken.ThrowIfCancellationRequested();
         byte[]? messageCiphertext = null;
+        var files = new List<OpenedFileData>();
+        OpenedFileData? verifiedFile = null;
         if (secret.MessageBlobId is not null && secret.MessageNonce is not null && secret.MessageOuterNonce is not null)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -191,9 +216,29 @@ public sealed class SecretApplicationService(
             messageCiphertext = inner;
         }
 
-        var files = new List<OpenedFileData>();
+        if (secret.OneTimeOpen)
+        {
+            var messageIsFirst = secret.MessageBlobId is not null && secret.MessageNonce is not null && secret.MessageOuterNonce is not null;
+            if (!messageIsFirst)
+            {
+                if (secret.Files.Count == 0) throw new InvalidDataException("Stored secret has no content.");
+                var file = secret.Files[0];
+                if (file.OuterNonce is null) throw new InvalidDataException("Stored encrypted file is incomplete.");
+                var wrapped = await blobs.ReadAsync(secret.Id, file.BlobId, cancellationToken);
+                verifiedFile = new OpenedFileData(file, session.Decrypt(new PasswordEnvelope(salt, Decode(file.OuterNonce), wrapped)));
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!await repository.TryConsumeOneTimeOpenAsync(secret.Id, clock.GetUtcNow(), cancellationToken)) throw new FileNotFoundException();
+        }
+
         foreach (var file in secret.Files)
         {
+            if (verifiedFile?.File.Id == file.Id)
+            {
+                files.Add(verifiedFile);
+                continue;
+            }
             cancellationToken.ThrowIfCancellationRequested();
             if (file.OuterNonce is null) throw new InvalidDataException("Stored encrypted file is incomplete.");
             var wrapped = await blobs.ReadAsync(secret.Id, file.BlobId);
@@ -204,7 +249,7 @@ public sealed class SecretApplicationService(
         }
 
         await repository.ResetUnlockAttemptsAsync(secret.Id, auditRequestId, cancellationToken);
-        return new SecretUnlockData(secret.MessageNonce, messageCiphertext, files);
+        return new SecretUnlockData(secret.MessageNonce, messageCiphertext, files, secret.OneTimeOpen);
     }
 
     public async Task<OpenedFileData?> OpenFileAsync(string id, string fileId, DateTimeOffset now, CancellationToken cancellationToken = default)
@@ -212,6 +257,9 @@ public sealed class SecretApplicationService(
         var secret = await repository.GetAsync(id, now, cancellationToken);
         if (secret is null) return null;
         if (secret.PasswordProtected) throw new SecretProtectedException();
+        // One-time secrets are released only by the combined open endpoint. This legacy
+        // per-file route cannot provide the complete payload and must not act as a bypass.
+        if (secret.OneTimeOpen) return null;
         var file = secret.Files.FirstOrDefault(candidate => candidate.Id == fileId);
         if (file is null) return null;
         return new OpenedFileData(file, await blobs.ReadAsync(secret.Id, file.BlobId));

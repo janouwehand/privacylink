@@ -45,7 +45,11 @@
             <span class="security-disclosure-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 10V7a5 5 0 0 1 10 0v3"></path><rect x="4.5" y="10" width="15" height="11" rx="1.5"></rect><path d="M12 14v3"></path></svg></span>
             <div class="security-disclosure-copy"><h2>{{ language.t('securityDisclosureTitle') }}</h2><span class="security-disclosure-hint">{{ language.t('securityDisclosureHint') }}</span></div>
             <span class="security-disclosure-status" aria-live="polite">
-              @if (create.password() && create.emailVerificationEnabled()) { {{ language.t('securityBothSet') }} }
+              @if (create.oneTimeOpenEnabled() && create.password() && create.emailVerificationEnabled()) { {{ language.t('securityAllSet') }} }
+              @else if (create.oneTimeOpenEnabled() && create.password()) { {{ language.t('securityOneTimeAndAccessCodeSet') }} }
+              @else if (create.oneTimeOpenEnabled() && create.emailVerificationEnabled()) { {{ language.t('securityOneTimeAndEmailSet') }} }
+              @else if (create.password() && create.emailVerificationEnabled()) { {{ language.t('securityBothSet') }} }
+              @else if (create.oneTimeOpenEnabled()) { {{ language.t('securityOneTimeSet') }} }
               @else if (create.password()) { {{ language.t('securityAccessCodeSet') }} }
               @else if (create.emailVerificationEnabled()) { {{ language.t('securityEmailVerificationSet') }} }
               @else { {{ language.t('securityNoneSet') }} }
@@ -53,6 +57,12 @@
             <svg class="security-disclosure-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
           </summary>
           <div class="security-disclosure-content" id="security-disclosure-content">
+            <div class="security-option">
+              <div class="security-option-copy"><h3>{{ language.t('oneTimeOpenOptionTitle') }}</h3><p class="field-note">{{ language.t('oneTimeOpenHint') }}</p>
+                @if (create.oneTimeOpenEnabled()) { <span class="security-option-summary"><span aria-hidden="true">✓</span>{{ language.t('oneTimeOpenConfigured') }}</span> }
+              </div>
+              <div class="security-option-actions"><button class="security-option-action" type="button" data-testid="one-time-open-action" (click)="create.toggleOneTimeOpen()" [disabled]="create.busy()">{{ create.oneTimeOpenEnabled() ? language.t('remove') : language.t('oneTimeOpenEnable') }}</button></div>
+            </div>
             <div class="security-option">
               <div class="security-option-copy"><h3>{{ language.t('accessCode') }}</h3><p class="field-note">{{ language.t('accessCodeHint') }}</p>
                 @if (create.password()) { <span class="security-option-summary"><span aria-hidden="true">✓</span>{{ language.t('accessCodeConfigured') }}</span> }

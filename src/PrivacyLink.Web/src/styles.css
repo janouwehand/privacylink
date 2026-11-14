@@ -334,6 +334,7 @@ h2 { font-size: 18px; margin: 0 0 26px; }
 .opened-recipient-hero { margin-bottom: 18px; }
 .opened-recipient-hero h1 { font-size: clamp(30px, 3.2vw, 40px); }
 .recipient-expiry { margin: 0 0 24px; color: #666; font-size: 13px; }
+.one-time-warning { margin: 18px 0 24px; padding: 18px 20px; border: 1px solid #d9a441; border-left: 5px solid #b7791f; border-radius: 4px; background: #fff8e8; color: #332b1b; font-size: 17px; font-weight: 600; line-height: 1.55; }
 .recipient-card #unlock-password { max-width: 520px; }
 .opened-content-grid { display: grid; gap: 28px; }
 .opened-content-grid h2 { margin: 0 0 12px; }

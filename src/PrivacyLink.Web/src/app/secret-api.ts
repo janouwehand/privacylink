@@ -45,7 +45,7 @@ export class SecretApi {
   getCreateChallenge(): Promise<CreateChallenge> {
     return this.fetchApi('/api/v1/secrets/create-challenge', { cache: 'no-store', referrerPolicy: 'no-referrer' }).then(response => responseJson<CreateChallenge>(response));
   }
-  create(request: { protocolVersion: 1; expiry: '1d' | '7d' | '14d'; message: EncryptedMessage | null; files: EncryptedFile[]; password?: string; emailAddress?: string }, proof: string): Promise<{ id: string; expiresAt: string; passwordProtected: boolean; revokeToken: string }> {
+  create(request: { protocolVersion: 1; expiry: '1d' | '7d' | '14d'; message: EncryptedMessage | null; files: EncryptedFile[]; password?: string; emailAddress?: string; oneTimeOpen?: boolean }, proof: string): Promise<{ id: string; expiresAt: string; passwordProtected: boolean; revokeToken: string }> {
     return this.fetchApi('/api/v1/secrets', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-PrivacyLink-Proof': proof }, body: JSON.stringify(request), cache: 'no-store', referrerPolicy: 'no-referrer' }).then(response => responseJson<{ id: string; expiresAt: string; passwordProtected: boolean; revokeToken: string }>(response));
   }
   createSerialized(body: ArrayBuffer, proof: string): Promise<{ id: string; expiresAt: string; passwordProtected: boolean; revokeToken: string }> {
@@ -57,7 +57,7 @@ export class SecretApi {
       if (!response.ok && response.status !== 404) throw new Error(`HTTP ${response.status}`);
     });
   }
-  getMetadata(id: string): Promise<{ exists: boolean; protocolVersion: number; expiresAt: string; passwordProtected: boolean; hasMessage: boolean; fileCount: number; files: EncryptedFileMetadata[]; emailVerificationRequired?: boolean; maskedEmailAddress?: string | null }> {
+  getMetadata(id: string): Promise<{ exists: boolean; protocolVersion: number; expiresAt: string; passwordProtected: boolean; hasMessage: boolean; fileCount: number; files: EncryptedFileMetadata[]; emailVerificationRequired?: boolean; maskedEmailAddress?: string | null; oneTimeOpen?: boolean; oneTimeOpened?: boolean }> {
     return this.fetchApi(`/api/v1/secrets/${SecretApi.pathPart(id)}`, { cache: 'no-store', referrerPolicy: 'no-referrer' }).then(response => responseJson(response));
   }
   requestEmailCode(id: string): Promise<{ code: string }> {
