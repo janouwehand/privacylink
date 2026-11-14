@@ -248,7 +248,7 @@ internal static class SecretEndpoints
         catch (JsonException) { return Error(400, "invalid_request"); }
     }
 
-    public static async Task<IResult> Open(string id, HttpRequest request, SecretApplicationService service, TimeProvider clock, EmailVerificationService verification, IWebHostEnvironment environment)
+    public static async Task<IResult> Open(string id, HttpRequest request, SecretApplicationService service, TimeProvider clock, EmailVerificationService verification, IWebHostEnvironment environment, ILoggerFactory loggerFactory)
     {
         if (request.ContentLength is > 0 || request.Headers.ContainsKey("Transfer-Encoding")) return Error(400, "invalid_request");
         if (!ValidId(id)) return Error(404, "not_found");
@@ -262,13 +262,16 @@ internal static class SecretEndpoints
                 ? new MessageCiphertext(opened.MessageNonce, Encode(opened.MessageCiphertext))
                 : null;
             var files = opened.Files.Select(file => OpenedFile(file.File, Encode(file.Ciphertext))).ToArray();
-            return Results.Json(new OpenSecretResponse(1, message, files), PrivacyLinkJsonContext.Default.OpenSecretResponse);
+            IResult response = Results.Json(new OpenSecretResponse(1, message, files), PrivacyLinkJsonContext.Default.OpenSecretResponse);
+            return opened.OneTimeOpen
+                ? new OneTimeOpenCleanupResult(response, service, id, loggerFactory.CreateLogger("OneTimeOpenCleanup"))
+                : response;
         }
         catch (SecretProtectedException) { return Error(403, "forbidden"); }
         catch (FileNotFoundException) { return Error(404, "not_found"); }
     }
 
-    public static async Task<IResult> Unlock(string id, HttpRequest request, SecretApplicationService service, TimeProvider clock, IConfiguration configuration, EmailVerificationService verification, IWebHostEnvironment environment)
+    public static async Task<IResult> Unlock(string id, HttpRequest request, SecretApplicationService service, TimeProvider clock, IConfiguration configuration, EmailVerificationService verification, IWebHostEnvironment environment, ILoggerFactory loggerFactory)
     {
         var cancellationToken = request.HttpContext.RequestAborted;
         var maxAttempts = BoundedLimit(configuration, "Security:UnlockAttempts:MaxPerWindow", 5, 1, 100);
@@ -297,7 +300,10 @@ internal static class SecretEndpoints
                 ? new MessageCiphertext(result.MessageNonce, Encode(result.MessageCiphertext))
                 : null;
             var files = result.Files.Select(file => OpenedFile(file.File, Encode(file.Ciphertext))).ToArray();
-            return Results.Json(new OpenSecretResponse(1, message, files), PrivacyLinkJsonContext.Default.OpenSecretResponse);
+            IResult response = Results.Json(new OpenSecretResponse(1, message, files), PrivacyLinkJsonContext.Default.OpenSecretResponse);
+            return result.OneTimeOpen
+                ? new OneTimeOpenCleanupResult(response, service, id, loggerFactory.CreateLogger("OneTimeOpenCleanup"))
+                : response;
         }
         catch (PasswordEnvelopeCapacityException)
         {

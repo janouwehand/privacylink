@@ -646,7 +646,7 @@ function mountRecipientOverlay(document: Document, controller: RecipientFlowCont
     if (snapshot.phase === 'unavailable' || snapshot.phase === 'error') return;
     if (snapshot.phase === 'opened') {
       content.append(makeTextElement(document, 'p', 'The secret was decrypted in the installed PrivacyLink client.', 'note'));
-      if (snapshot.oneTimeOpen) content.append(makeTextElement(document, 'p', 'One-time link: leaving this page loses access. The server keeps the encrypted content until expiry or revocation.', 'note'));
+      if (snapshot.oneTimeOpen) content.append(makeTextElement(document, 'p', 'One-time link: leaving this page loses access. After the full response is sent, the server deletes the encrypted content and metadata. If delivery fails, the link remains used and inaccessible until expiry or revocation cleanup.', 'note'));
       if (snapshot.openedMessage) {
         const section = document.createElement('section');
         section.append(makeTextElement(document, 'h2', 'Message'));

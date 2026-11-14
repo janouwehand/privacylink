@@ -182,6 +182,27 @@ internal sealed class InMemorySecretRepository : ISecretRepository, IInfrastruct
         }
     }
 
+    public Task<StoredSecret?> GetConsumedOneTimeAsync(string id, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+            return Task.FromResult(_secrets.TryGetValue(id, out var secret) && secret.OneTimeOpen && secret.OpenedAt is not null ? secret : null);
+    }
+
+    public Task<bool> DeleteConsumedOneTimeAsync(string id, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+        {
+            if (!_secrets.TryGetValue(id, out var secret) || !secret.OneTimeOpen || secret.OpenedAt is null)
+                return Task.FromResult(false);
+            _secrets.Remove(id);
+            _bytes -= secret.Size;
+            _unlockAttempts.Remove(id);
+            return Task.FromResult(true);
+        }
+    }
+
     public Task<StoredSecret?> GetForRevocationAsync(string id, string revokeTokenHash, CancellationToken cancellationToken = default)
     {
         lock (_gate)
@@ -501,6 +522,25 @@ internal sealed class PostgresSecretRepository(IConfiguration configuration) : I
         await using var command = new NpgsqlCommand("UPDATE secrets SET opened_at = $2 WHERE id = $1 AND one_time_open = TRUE AND opened_at IS NULL AND expires_at > $2", connection);
         command.Parameters.AddWithValue(id);
         command.Parameters.AddWithValue(now.UtcDateTime);
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+    }
+
+    public async Task<StoredSecret?> GetConsumedOneTimeAsync(string id, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = new NpgsqlCommand("SELECT id, expires_at, protocol_version, nonce, blob_id, password_salt, message_outer_nonce, ciphertext_size, files_json, email_address, one_time_open, opened_at FROM secrets WHERE id = $1 AND one_time_open = TRUE AND opened_at IS NOT NULL", connection);
+        command.Parameters.AddWithValue(id);
+        await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow, cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? Read(reader) : null;
+    }
+
+    public async Task<bool> DeleteConsumedOneTimeAsync(string id, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = new NpgsqlCommand("DELETE FROM secrets WHERE id = $1 AND one_time_open = TRUE AND opened_at IS NOT NULL", connection);
+        command.Parameters.AddWithValue(id);
         return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
     }
 

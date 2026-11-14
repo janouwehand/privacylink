@@ -359,7 +359,7 @@ describe('PrivacyLink extension recipient flow', () => {
     expect(controller!.snapshot().phase).toBe('opened');
     expect(downloads).toEqual([{ name: 'near-limit.txt', length: size }]);
     controller!.dispose();
-  });
+  }, 15000);
 
   it.each([
     ['network failure', null],

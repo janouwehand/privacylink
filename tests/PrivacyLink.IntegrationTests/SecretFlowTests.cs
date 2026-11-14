@@ -1,6 +1,9 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
@@ -355,12 +358,94 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         Assert.Single(body.GetProperty("files").EnumerateArray());
         Assert.Equal(fileId, body.GetProperty("files")[0].GetProperty("id").GetString());
 
-        metadata = await _client.GetFromJsonAsync<JsonElement>($"/api/v1/secrets/{id}");
-        Assert.True(metadata.GetProperty("oneTimeOpened").GetBoolean());
+        using var deletedMetadata = await _client.GetAsync($"/api/v1/secrets/{id}");
+        Assert.Equal(HttpStatusCode.NotFound, deletedMetadata.StatusCode);
         using var repeatedOpen = await _client.PostAsync($"/api/v1/secrets/{id}/open", null);
         using var directFileAfterOpen = await _client.PostAsync($"/api/v1/secrets/{id}/files/{fileId}/open", null);
         Assert.Equal(HttpStatusCode.NotFound, repeatedOpen.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, directFileAfterOpen.StatusCode);
+    }
+
+    [Fact]
+    public async Task SuccessfulOneTimeResponseDeletesBlobsAndSecretMetadata()
+    {
+        var blobStorage = new FailOnceBlobStorage();
+        var auditWriter = new CapturingSecretAuditWriter();
+        using var factory = new TestApiFactory().WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+        {
+            services.RemoveAll<IBlobStorage>();
+            services.AddSingleton<IBlobStorage>(blobStorage);
+            services.RemoveAll<ISecretRequestAuditWriter>();
+            services.AddSingleton<ISecretRequestAuditWriter>(auditWriter);
+        }));
+        using var client = factory.CreateClient();
+        var fileId = Convert.ToBase64String(Enumerable.Repeat((byte)5, 16).ToArray()).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        using var created = await CreateProofTestHelper.CreateAsync(client, new
+        {
+            protocolVersion = 1,
+            expiry = "1d",
+            oneTimeOpen = true,
+            message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" },
+            files = new[] { new { id = fileId, extension = ".txt", nameNonce = "AAAAAAAAAAAAAAAA", nameCiphertext = "AAAAAAAAAAAAAAAAAAAAAA", mimeType = "text/plain", size = 1L, nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" } }
+        });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        Assert.Equal(2, blobStorage.BlobCount);
+
+        using var opened = await client.PostAsync($"/api/v1/secrets/{id}/open", null);
+        Assert.Equal(HttpStatusCode.OK, opened.StatusCode);
+        var content = await opened.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Single(content.GetProperty("files").EnumerateArray());
+        var completedAudit = auditWriter.GetCompleted(id, "open");
+        Assert.Equal(200, completedAudit.Finish.HttpStatus);
+        Assert.Equal("success", completedAudit.Finish.Outcome);
+        Assert.Equal(0, blobStorage.BlobCount);
+        using var metadata = await client.GetAsync($"/api/v1/secrets/{id}");
+        using var replay = await client.PostAsync($"/api/v1/secrets/{id}/open", null);
+        Assert.Equal(HttpStatusCode.NotFound, metadata.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, replay.StatusCode);
+    }
+
+    [Fact]
+    public async Task FailedResponseWriteKeepsConsumedOneTimeSecretAndBlobsForLaterCleanup()
+    {
+        var blobStorage = new FailOnceBlobStorage();
+        var auditWriter = new CapturingSecretAuditWriter();
+        using var factory = new TestApiFactory().WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+        {
+            services.RemoveAll<IBlobStorage>();
+            services.AddSingleton<IBlobStorage>(blobStorage);
+            services.RemoveAll<ISecretRequestAuditWriter>();
+            services.AddSingleton<ISecretRequestAuditWriter>(auditWriter);
+            services.AddSingleton<IStartupFilter, FailOpenResponseWriteStartupFilter>();
+        }));
+        using var client = factory.CreateClient();
+        using var created = await CreateProofTestHelper.CreateAsync(client, new
+        {
+            protocolVersion = 1,
+            expiry = "1d",
+            oneTimeOpen = true,
+            message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" },
+            files = Array.Empty<object>()
+        });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        Assert.Equal(1, blobStorage.BlobCount);
+
+        using var failedResponse = await client.PostAsync($"/api/v1/secrets/{id}/open", null);
+        Assert.Equal(HttpStatusCode.InternalServerError, failedResponse.StatusCode);
+        var failedAudit = auditWriter.GetCompleted(id, "open");
+        Assert.Equal(500, failedAudit.Finish.HttpStatus);
+        Assert.Equal("error", failedAudit.Finish.Outcome);
+        using var metadataResponse = await client.GetAsync($"/api/v1/secrets/{id}");
+        Assert.Equal(HttpStatusCode.OK, metadataResponse.StatusCode);
+        var metadata = await metadataResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.True(metadata.GetProperty("oneTimeOpened").GetBoolean());
+        Assert.Equal(1, blobStorage.BlobCount);
+
+        using var replay = await client.PostAsync($"/api/v1/secrets/{id}/open", null);
+        Assert.Equal(HttpStatusCode.NotFound, replay.StatusCode);
+        Assert.Equal(1, blobStorage.BlobCount);
     }
 
     [Fact]
@@ -695,6 +780,7 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
     {
         private readonly Dictionary<(string SecretId, string BlobId), byte[]> _blobs = new();
         private int _failNextRead;
+        public int BlobCount => _blobs.Count;
 
         public void FailNextRead() => Interlocked.Exchange(ref _failNextRead, 1);
 
@@ -720,6 +806,103 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
             cancellationToken.ThrowIfCancellationRequested();
             _blobs.Remove((secretId, blobId));
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class CapturingSecretAuditWriter : ISecretRequestAuditWriter
+    {
+        private readonly object _gate = new();
+        private readonly List<SecretRequestAuditStart> _starts = [];
+        private readonly Dictionary<Guid, SecretRequestAuditFinish> _finishes = [];
+
+        public Task StartAsync(SecretRequestAuditStart audit, CancellationToken cancellationToken = default)
+        {
+            lock (_gate) _starts.Add(audit);
+            return Task.CompletedTask;
+        }
+
+        public Task FinishAsync(Guid requestId, SecretRequestAuditFinish finish, CancellationToken cancellationToken = default)
+        {
+            lock (_gate) _finishes[requestId] = finish;
+            return Task.CompletedTask;
+        }
+
+        public (SecretRequestAuditStart Start, SecretRequestAuditFinish Finish) GetCompleted(string secretId, string action)
+        {
+            lock (_gate)
+            {
+                var start = _starts.Single(item => item.SecretId == secretId && item.Action == action);
+                return (start, _finishes[start.RequestId]);
+            }
+        }
+    }
+
+    private sealed class FailOpenResponseWriteStartupFilter : IStartupFilter
+    {
+        private int _failNextOpen = 1;
+
+        public FailOpenResponseWriteStartupFilter() { }
+
+        public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
+        {
+            app.Use(async (context, nextMiddleware) =>
+            {
+                var originalBody = context.Response.Body;
+                if (HttpMethods.IsPost(context.Request.Method) && context.Request.Path.Value?.EndsWith("/open", StringComparison.Ordinal) == true &&
+                    Interlocked.Exchange(ref _failNextOpen, 0) == 1)
+                    context.Response.Body = new FailFirstWriteStream(originalBody);
+                try { await nextMiddleware(); }
+                finally { context.Response.Body = originalBody; }
+            });
+            next(app);
+        };
+    }
+
+    private sealed class FailFirstWriteStream(Stream inner) : Stream
+    {
+        private int _failNextWrite = 1;
+
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => inner.Flush();
+        public override Task FlushAsync(CancellationToken cancellationToken) => inner.FlushAsync(cancellationToken);
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            ThrowOnFirstWrite();
+            inner.Write(buffer, offset, count);
+        }
+
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            ThrowOnFirstWrite();
+            inner.Write(buffer);
+        }
+
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            if (Interlocked.Exchange(ref _failNextWrite, 0) == 1)
+                return Task.FromException(new IOException("Injected response write failure."));
+            return inner.WriteAsync(buffer, offset, count, cancellationToken);
+        }
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Exchange(ref _failNextWrite, 0) == 1)
+                return ValueTask.FromException(new IOException("Injected response write failure."));
+            return inner.WriteAsync(buffer, cancellationToken);
+        }
+
+        private void ThrowOnFirstWrite()
+        {
+            if (Interlocked.Exchange(ref _failNextWrite, 0) == 1)
+                throw new IOException("Injected response write failure.");
         }
     }
 }

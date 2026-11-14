@@ -7,9 +7,9 @@ public sealed record SecretCreateMessage(string Nonce, byte[] Ciphertext);
 public sealed record SecretCreateFile(string Id, string Extension, string NameNonce, string NameCiphertext, string MimeType, long Size, string Nonce, byte[] Ciphertext);
 public sealed record CreateSecretCommand(string Expiry, SecretCreateMessage? Message, IReadOnlyList<SecretCreateFile> Files, string? Password, string? SecretId = null, Guid? AuditRequestId = null, string? EmailAddress = null, bool OneTimeOpen = false);
 public sealed record CreatedSecret(string Id, DateTimeOffset ExpiresAt, bool PasswordProtected, string RevokeToken);
-public sealed record SecretOpenData(string? MessageNonce, byte[]? MessageCiphertext, IReadOnlyList<OpenedFileData> Files);
+public sealed record SecretOpenData(string? MessageNonce, byte[]? MessageCiphertext, IReadOnlyList<OpenedFileData> Files, bool OneTimeOpen);
 public sealed record OpenedFileData(StoredFile File, byte[] Ciphertext);
-public sealed record SecretUnlockData(string? MessageNonce, byte[]? MessageCiphertext, IReadOnlyList<OpenedFileData> Files);
+public sealed record SecretUnlockData(string? MessageNonce, byte[]? MessageCiphertext, IReadOnlyList<OpenedFileData> Files, bool OneTimeOpen);
 
 public sealed class SecretProtectedException : Exception { }
 public sealed class EmailAddressInvalidException : Exception { }
@@ -140,6 +140,21 @@ public sealed class SecretApplicationService(
         return true;
     }
 
+    public async Task<bool> CleanupConsumedOneTimeAsync(string id, CancellationToken cancellationToken = default)
+    {
+        var secret = await repository.GetConsumedOneTimeAsync(id, cancellationToken);
+        if (secret is null) return false;
+
+        var blobIds = secret.Files.Select(file => file.BlobId)
+            .Append(secret.MessageBlobId)
+            .OfType<string>()
+            .Distinct(StringComparer.Ordinal);
+        foreach (var blobId in blobIds)
+            await blobs.DeleteAsync(secret.Id, blobId, cancellationToken);
+
+        return await repository.DeleteConsumedOneTimeAsync(id, cancellationToken);
+    }
+
     public async Task<SecretOpenData?> OpenAsync(string id, DateTimeOffset now, CancellationToken cancellationToken = default)
     {
         var secret = await repository.GetAsync(id, now, cancellationToken);
@@ -156,7 +171,7 @@ public sealed class SecretApplicationService(
             cancellationToken.ThrowIfCancellationRequested();
             files.Add(new OpenedFileData(file, await blobs.ReadAsync(secret.Id, file.BlobId, cancellationToken)));
         }
-        return new SecretOpenData(secret.MessageNonce, messageCiphertext, files);
+        return new SecretOpenData(secret.MessageNonce, messageCiphertext, files, secret.OneTimeOpen);
     }
 
     public async Task<StoredSecret?> GetUnlockTargetAsync(string id, DateTimeOffset now, CancellationToken cancellationToken = default)
@@ -234,7 +249,7 @@ public sealed class SecretApplicationService(
         }
 
         await repository.ResetUnlockAttemptsAsync(secret.Id, auditRequestId, cancellationToken);
-        return new SecretUnlockData(secret.MessageNonce, messageCiphertext, files);
+        return new SecretUnlockData(secret.MessageNonce, messageCiphertext, files, secret.OneTimeOpen);
     }
 
     public async Task<OpenedFileData?> OpenFileAsync(string id, string fileId, DateTimeOffset now, CancellationToken cancellationToken = default)

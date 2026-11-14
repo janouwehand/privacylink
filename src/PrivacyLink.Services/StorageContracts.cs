@@ -97,6 +97,8 @@ public interface ISecretRepository
     Task<StoredSecret?> CreateAsync(StoredSecret secret, Guid? auditRequestId = null, CancellationToken cancellationToken = default);
     Task<StoredSecret?> GetAsync(string id, DateTimeOffset now, CancellationToken cancellationToken = default);
     Task<bool> TryConsumeOneTimeOpenAsync(string id, DateTimeOffset now, CancellationToken cancellationToken = default);
+    Task<StoredSecret?> GetConsumedOneTimeAsync(string id, CancellationToken cancellationToken = default);
+    Task<bool> DeleteConsumedOneTimeAsync(string id, CancellationToken cancellationToken = default);
     Task<StoredSecret?> GetForRevocationAsync(string id, string revokeTokenHash, CancellationToken cancellationToken = default);
     Task<UnlockAttemptAdmission> ReserveUnlockAttemptAsync(string id, DateTimeOffset now, int maxAttempts, TimeSpan window, TimeSpan cooldown, CancellationToken cancellationToken = default);
     Task ResetUnlockAttemptsAsync(string id, Guid? auditRequestId = null, CancellationToken cancellationToken = default);

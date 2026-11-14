@@ -289,7 +289,7 @@ describe('App', () => {
 
     await recipient.open();
     fixture.detectChanges();
-    expect((fixture.nativeElement as HTMLElement).querySelector('.one-time-warning')?.textContent).toContain('cannot reopen the content');
+    expect((fixture.nativeElement as HTMLElement).querySelector('.one-time-warning')?.textContent).toContain('cannot retrieve the content again');
     const beforeUnload = new Event('beforeunload', { cancelable: true });
     window.dispatchEvent(beforeUnload);
     expect(beforeUnload.defaultPrevented).toBe(true);
@@ -704,7 +704,7 @@ describe('App', () => {
     const securityDisclosure = compiled.querySelector<HTMLDetailsElement>('[data-testid="security-disclosure"]')!;
 
     expect(securityDisclosure.open).toBe(false);
-    expect(compiled.querySelector('.security-disclosure-status')?.textContent).toContain('Not configured');
+    expect(compiled.querySelector('.security-disclosure-status')?.textContent).toContain('One-time opening set');
     expect(compiled.querySelector('.security-status-summary')).toBeNull();
     expect(compiled.querySelector('#expiry')).not.toBeNull();
     expect(compiled.querySelector('#access-code-input')?.closest('dialog')?.open).toBe(false);
@@ -713,9 +713,8 @@ describe('App', () => {
     securityDisclosure.open = true;
     fixture.detectChanges();
     expect(compiled.querySelector('.security-disclosure-content .security-option h3')?.textContent).toContain('One-time opening');
-    compiled.querySelector<HTMLButtonElement>('[data-testid="one-time-open-action"]')!.click();
-    fixture.detectChanges();
     expect(create.oneTimeOpenEnabled()).toBe(true);
+    expect(compiled.querySelector<HTMLButtonElement>('[data-testid="one-time-open-action"]')?.textContent).toContain('Remove');
     expect(compiled.querySelector('.security-disclosure-content .security-option h3')?.textContent).toContain('One-time opening');
     compiled.querySelector<HTMLButtonElement>('[data-testid="access-code-action"]')!.click();
     fixture.detectChanges();
