@@ -15,7 +15,7 @@ internal sealed class SecretRequestAuditMiddleware(IConfiguration configuration,
     public async Task InvokeAsync(HttpContext context, RequestDelegate next)
     {
         var path = context.Request.Path.Value ?? string.Empty;
-        if (HttpMethods.IsGet(context.Request.Method) && path.Equals("/api/v1/secrets/create-challenge", StringComparison.OrdinalIgnoreCase))
+        if (HttpMethods.IsGet(context.Request.Method) && PrivacyAudit.IsChallengePath(context.Request.Path))
         {
             await next(context);
             return;

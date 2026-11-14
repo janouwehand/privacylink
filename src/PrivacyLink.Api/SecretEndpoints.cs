@@ -20,6 +20,16 @@ internal static class SecretEndpoints
 
     public static IResult CreateChallenge(CreateProofOfWork proofOfWork) => Results.Json(proofOfWork.Issue(), PrivacyLinkJsonContext.Default.CreateChallengeResponse);
 
+    public static IResult OpenChallenge(string id, string action, OpenProofOfWork proofOfWork) =>
+        !ValidId(id) || action is not ("open" or "unlock")
+            ? Error(404, "not_found")
+            : Results.Json(proofOfWork.Issue(id, action), PrivacyLinkJsonContext.Default.CreateChallengeResponse);
+
+    public static IResult OpenFileChallenge(string id, string fileId, OpenProofOfWork proofOfWork) =>
+        !ValidId(id) || !ValidId(fileId)
+            ? Error(404, "not_found")
+            : Results.Json(proofOfWork.Issue(id, $"file-open:{fileId}"), PrivacyLinkJsonContext.Default.CreateChallengeResponse);
+
     public static async Task<IResult> Create(HttpRequest request, HttpContext context, SecretApplicationService service, IConfiguration configuration, CreateProofOfWork proofOfWork)
     {
         var cancellationToken = request.HttpContext.RequestAborted;
@@ -248,10 +258,12 @@ internal static class SecretEndpoints
         catch (JsonException) { return Error(400, "invalid_request"); }
     }
 
-    public static async Task<IResult> Open(string id, HttpRequest request, SecretApplicationService service, TimeProvider clock, EmailVerificationService verification, IWebHostEnvironment environment, ILoggerFactory loggerFactory)
+    public static async Task<IResult> Open(string id, HttpRequest request, OpenProofOfWork proofOfWork, SecretApplicationService service, TimeProvider clock, EmailVerificationService verification, IWebHostEnvironment environment, ILoggerFactory loggerFactory)
     {
-        if (request.ContentLength is > 0 || request.Headers.ContainsKey("Transfer-Encoding")) return Error(400, "invalid_request");
         if (!ValidId(id)) return Error(404, "not_found");
+        var proofError = await CheckOpenProof(request, proofOfWork, id, "open");
+        if (proofError is not null) return proofError;
+        if (request.ContentLength is > 0 || request.Headers.ContainsKey("Transfer-Encoding")) return Error(400, "invalid_request");
         try
         {
             var access = await CheckEmailAccess(id, request, verification, environment);
@@ -271,14 +283,16 @@ internal static class SecretEndpoints
         catch (FileNotFoundException) { return Error(404, "not_found"); }
     }
 
-    public static async Task<IResult> Unlock(string id, HttpRequest request, SecretApplicationService service, TimeProvider clock, IConfiguration configuration, EmailVerificationService verification, IWebHostEnvironment environment, ILoggerFactory loggerFactory)
+    public static async Task<IResult> Unlock(string id, HttpRequest request, OpenProofOfWork proofOfWork, SecretApplicationService service, TimeProvider clock, IConfiguration configuration, EmailVerificationService verification, IWebHostEnvironment environment, ILoggerFactory loggerFactory)
     {
         var cancellationToken = request.HttpContext.RequestAborted;
         var maxAttempts = BoundedLimit(configuration, "Security:UnlockAttempts:MaxPerWindow", 5, 1, 100);
         var attemptWindow = TimeSpan.FromMinutes(BoundedLimit(configuration, "Security:UnlockAttempts:WindowMinutes", 15, 1, 1440));
         var cooldown = TimeSpan.FromMinutes(BoundedLimit(configuration, "Security:UnlockAttempts:CooldownMinutes", 15, 1, 1440));
-        if (!request.HasJsonContentType() || request.ContentLength is > 16 * 1024 || request.ContentLength is 0) return Error(400, "invalid_request");
         if (!ValidId(id)) return Error(404, "not_found");
+        var proofError = await CheckOpenProof(request, proofOfWork, id, "unlock");
+        if (proofError is not null) return proofError;
+        if (!request.HasJsonContentType() || request.ContentLength is > 16 * 1024 || request.ContentLength is 0) return Error(400, "invalid_request");
         var emailAccess = await CheckEmailAccess(id, request, verification, environment);
         if (emailAccess is not null) return emailAccess;
         StoredSecret? secret;
@@ -325,10 +339,12 @@ internal static class SecretEndpoints
         catch (FormatException) { return Error(500, "server_error"); }
     }
 
-    public static async Task<IResult> OpenFile(string id, string fileId, HttpRequest request, SecretApplicationService service, TimeProvider clock, EmailVerificationService verification, IWebHostEnvironment environment)
+    public static async Task<IResult> OpenFile(string id, string fileId, HttpRequest request, OpenProofOfWork proofOfWork, SecretApplicationService service, TimeProvider clock, EmailVerificationService verification, IWebHostEnvironment environment)
     {
-        if (request.ContentLength is > 0 || request.Headers.ContainsKey("Transfer-Encoding")) return Error(400, "invalid_request");
         if (!ValidId(id) || !ValidId(fileId)) return Error(404, "not_found");
+        var proofError = await CheckOpenProof(request, proofOfWork, id, $"file-open:{fileId}");
+        if (proofError is not null) return proofError;
+        if (request.ContentLength is > 0 || request.Headers.ContainsKey("Transfer-Encoding")) return Error(400, "invalid_request");
         try
         {
             var access = await CheckEmailAccess(id, request, verification, environment);
@@ -363,6 +379,16 @@ internal static class SecretEndpoints
     }
     private static string Encode(byte[] bytes) => Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
     private static IResult Error(int status, string code) => Results.Json(new ErrorResponse(code), PrivacyLinkJsonContext.Default.ErrorResponse, statusCode: status);
+    private static async Task<IResult?> CheckOpenProof(HttpRequest request, OpenProofOfWork proofOfWork, string id, string action)
+    {
+        var result = await proofOfWork.ValidateAndConsumeAsync(request.Headers["X-PrivacyLink-Proof"].ToString(), id, action, request.HttpContext.RequestAborted);
+        if (result == ProofCheckResult.Unavailable)
+        {
+            request.HttpContext.Response.Headers.RetryAfter = "5";
+            return Error(503, "temporarily_unavailable");
+        }
+        return result == ProofCheckResult.Valid ? null : Error(403, "proof_required");
+    }
     private static async Task<byte[]?> ReadBoundedBodyAsync(HttpRequest request, int maximumBytes, CancellationToken cancellationToken)
     {
         using var body = new MemoryStream();

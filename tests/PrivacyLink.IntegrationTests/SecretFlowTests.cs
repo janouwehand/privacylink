@@ -118,7 +118,7 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         var id = body.RootElement.GetProperty("id").GetString();
         var metadata = await _client.GetAsync($"/api/v1/secrets/{id}");
         Assert.Equal(HttpStatusCode.OK, metadata.StatusCode);
-        var opened = await _client.PostAsync($"/api/v1/secrets/{id}/open", null);
+        var opened = await CreateProofTestHelper.OpenAsync(_client, id!);
         Assert.Equal(HttpStatusCode.OK, opened.StatusCode);
         Assert.Contains("AAAAAAAAAAAAAAAAAAAAAAA", await opened.Content.ReadAsStringAsync());
         Assert.Equal("no-store", opened.Headers.CacheControl?.ToString());
@@ -160,6 +160,39 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         using var replay = await _client.SendAsync(replayRequest);
         Assert.Equal(HttpStatusCode.Forbidden, replay.StatusCode);
         Assert.Equal("{\"code\":\"proof_required\"}", await replay.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task OpeningRequiresFreshProofBoundToSecretAndOperationBeforeOneTimeConsumption()
+    {
+        var payload = new { protocolVersion = 1, expiry = "1d", oneTimeOpen = true, message = new { nonce = "AAAAAAAAAAAAAAAA", ciphertext = "AAAAAAAAAAAAAAAAAAAAAAA" }, files = Array.Empty<object>() };
+        using var createdFirst = await CreateProofTestHelper.CreateAsync(_client, payload);
+        using var createdSecond = await CreateProofTestHelper.CreateAsync(_client, payload);
+        var firstId = (await createdFirst.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        var secondId = (await createdSecond.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+
+        using var challenge = await _client.GetAsync($"/api/v1/secrets/{firstId}/open-challenge");
+        Assert.Equal(HttpStatusCode.OK, challenge.StatusCode);
+        Assert.Equal("no-store", challenge.Headers.CacheControl?.ToString());
+        var proof = await CreateProofTestHelper.GetOpenProofAsync(_client, firstId, "open");
+
+        using var noProof = await _client.PostAsync($"/api/v1/secrets/{firstId}/open", null);
+        Assert.Equal(HttpStatusCode.Forbidden, noProof.StatusCode);
+        Assert.Equal("{\"code\":\"proof_required\"}", await noProof.Content.ReadAsStringAsync());
+
+        using var wrongSecret = await CreateProofTestHelper.SendWithOpenProofAsync(_client, $"/api/v1/secrets/{secondId}/open", proof);
+        Assert.Equal(HttpStatusCode.Forbidden, wrongSecret.StatusCode);
+        using var wrongOperation = await CreateProofTestHelper.SendWithOpenProofAsync(_client, $"/api/v1/secrets/{firstId}/unlock", proof, new { password = "unused" });
+        Assert.Equal(HttpStatusCode.Forbidden, wrongOperation.StatusCode);
+        var metadata = await _client.GetFromJsonAsync<JsonElement>($"/api/v1/secrets/{firstId}");
+        Assert.False(metadata.GetProperty("oneTimeOpened").GetBoolean());
+
+        using var opened = await CreateProofTestHelper.SendWithOpenProofAsync(_client, $"/api/v1/secrets/{firstId}/open", proof);
+        Assert.Equal(HttpStatusCode.OK, opened.StatusCode);
+        using var replay = await CreateProofTestHelper.SendWithOpenProofAsync(_client, $"/api/v1/secrets/{firstId}/open", proof);
+        Assert.Equal(HttpStatusCode.Forbidden, replay.StatusCode);
+        using var afterOpen = await _client.GetAsync($"/api/v1/secrets/{firstId}");
+        Assert.Equal(HttpStatusCode.NotFound, afterOpen.StatusCode);
     }
 
     [Fact]
@@ -259,9 +292,9 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         Assert.Equal(metadataResults[0], metadataResults[1]);
         Assert.Equal(metadataResults[0], metadataResults[2]);
 
-        using var unknownOpen = await client.PostAsync($"/api/v1/secrets/{unknownId}/open", null);
-        using var expiredOpen = await client.PostAsync($"/api/v1/secrets/{expired.Id}/open", null);
-        using var revokedOpen = await client.PostAsync($"/api/v1/secrets/{revoked.Id}/open", null);
+        using var unknownOpen = await CreateProofTestHelper.OpenAsync(client, unknownId);
+        using var expiredOpen = await CreateProofTestHelper.OpenAsync(client, expired.Id);
+        using var revokedOpen = await CreateProofTestHelper.OpenAsync(client, revoked.Id);
         var openResults = new[]
         {
             (unknownOpen.StatusCode, await unknownOpen.Content.ReadAsStringAsync()),
@@ -312,12 +345,12 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         Assert.Equal(".txt", metadata.GetProperty("files")[0].GetProperty("extension").GetString());
         Assert.Equal("AAAAAAAAAAAAAAAAAAAAAA", metadata.GetProperty("files")[0].GetProperty("nameCiphertext").GetString());
         Assert.False(metadata.GetProperty("files")[0].TryGetProperty("name", out _));
-        var open = await _client.PostAsync($"/api/v1/secrets/{id}/open", null);
+        var open = await CreateProofTestHelper.OpenAsync(_client, id!);
         Assert.Equal(HttpStatusCode.OK, open.StatusCode);
         var openBody = await open.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Single(openBody.GetProperty("files").EnumerateArray());
         Assert.Equal(fileId, openBody.GetProperty("files")[0].GetProperty("id").GetString());
-        var opened = await _client.PostAsync($"/api/v1/secrets/{id}/files/{fileId}/open", null);
+        var opened = await CreateProofTestHelper.OpenFileAsync(_client, id!, fileId);
         Assert.Equal(HttpStatusCode.OK, opened.StatusCode);
         var openedBody = JsonDocument.Parse(await opened.Content.ReadAsStringAsync()).RootElement;
         Assert.Equal(".txt", openedBody.GetProperty("file").GetProperty("extension").GetString());
@@ -346,12 +379,12 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         Assert.True(metadata.GetProperty("oneTimeOpen").GetBoolean());
         Assert.False(metadata.GetProperty("oneTimeOpened").GetBoolean());
 
-        using var directFileBeforeOpen = await _client.PostAsync($"/api/v1/secrets/{id}/files/{fileId}/open", null);
+        using var directFileBeforeOpen = await CreateProofTestHelper.OpenFileAsync(_client, id, fileId);
         Assert.Equal(HttpStatusCode.NotFound, directFileBeforeOpen.StatusCode);
         metadata = await _client.GetFromJsonAsync<JsonElement>($"/api/v1/secrets/{id}");
         Assert.False(metadata.GetProperty("oneTimeOpened").GetBoolean());
 
-        using var opened = await _client.PostAsync($"/api/v1/secrets/{id}/open", null);
+        using var opened = await CreateProofTestHelper.OpenAsync(_client, id);
         Assert.Equal(HttpStatusCode.OK, opened.StatusCode);
         var body = await opened.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Contains("AAAAAAAAAAAAAAAAAAAAAAA", body.GetProperty("message").GetProperty("ciphertext").GetString());
@@ -360,8 +393,8 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
 
         using var deletedMetadata = await _client.GetAsync($"/api/v1/secrets/{id}");
         Assert.Equal(HttpStatusCode.NotFound, deletedMetadata.StatusCode);
-        using var repeatedOpen = await _client.PostAsync($"/api/v1/secrets/{id}/open", null);
-        using var directFileAfterOpen = await _client.PostAsync($"/api/v1/secrets/{id}/files/{fileId}/open", null);
+        using var repeatedOpen = await CreateProofTestHelper.OpenAsync(_client, id);
+        using var directFileAfterOpen = await CreateProofTestHelper.OpenFileAsync(_client, id, fileId);
         Assert.Equal(HttpStatusCode.NotFound, repeatedOpen.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, directFileAfterOpen.StatusCode);
     }
@@ -392,7 +425,7 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
         Assert.Equal(2, blobStorage.BlobCount);
 
-        using var opened = await client.PostAsync($"/api/v1/secrets/{id}/open", null);
+        using var opened = await CreateProofTestHelper.OpenAsync(client, id);
         Assert.Equal(HttpStatusCode.OK, opened.StatusCode);
         var content = await opened.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Single(content.GetProperty("files").EnumerateArray());
@@ -401,7 +434,7 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         Assert.Equal("success", completedAudit.Finish.Outcome);
         Assert.Equal(0, blobStorage.BlobCount);
         using var metadata = await client.GetAsync($"/api/v1/secrets/{id}");
-        using var replay = await client.PostAsync($"/api/v1/secrets/{id}/open", null);
+        using var replay = await CreateProofTestHelper.OpenAsync(client, id);
         Assert.Equal(HttpStatusCode.NotFound, metadata.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, replay.StatusCode);
     }
@@ -432,7 +465,7 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
         Assert.Equal(1, blobStorage.BlobCount);
 
-        using var failedResponse = await client.PostAsync($"/api/v1/secrets/{id}/open", null);
+        using var failedResponse = await CreateProofTestHelper.OpenAsync(client, id);
         Assert.Equal(HttpStatusCode.InternalServerError, failedResponse.StatusCode);
         var failedAudit = auditWriter.GetCompleted(id, "open");
         Assert.Equal(500, failedAudit.Finish.HttpStatus);
@@ -443,7 +476,7 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         Assert.True(metadata.GetProperty("oneTimeOpened").GetBoolean());
         Assert.Equal(1, blobStorage.BlobCount);
 
-        using var replay = await client.PostAsync($"/api/v1/secrets/{id}/open", null);
+        using var replay = await CreateProofTestHelper.OpenAsync(client, id);
         Assert.Equal(HttpStatusCode.NotFound, replay.StatusCode);
         Assert.Equal(1, blobStorage.BlobCount);
     }
@@ -462,7 +495,7 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
 
-        var attempts = await Task.WhenAll(Enumerable.Range(0, 12).Select(_ => _client.PostAsync($"/api/v1/secrets/{id}/open", null)));
+        var attempts = await Task.WhenAll(Enumerable.Range(0, 12).Select(_ => CreateProofTestHelper.OpenAsync(_client, id)));
 
         Assert.Single(attempts.Where(response => response.StatusCode == HttpStatusCode.OK));
         Assert.Equal(11, attempts.Count(response => response.StatusCode == HttpStatusCode.NotFound));
@@ -491,12 +524,12 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
 
         blobStorage.FailNextRead();
-        using var failedDelivery = await client.PostAsync($"/api/v1/secrets/{id}/open", null);
+        using var failedDelivery = await CreateProofTestHelper.OpenAsync(client, id);
         Assert.Equal(HttpStatusCode.InternalServerError, failedDelivery.StatusCode);
         var metadata = await client.GetFromJsonAsync<JsonElement>($"/api/v1/secrets/{id}");
         Assert.True(metadata.GetProperty("oneTimeOpened").GetBoolean());
 
-        using var retry = await client.PostAsync($"/api/v1/secrets/{id}/open", null);
+        using var retry = await CreateProofTestHelper.OpenAsync(client, id);
         Assert.Equal(HttpStatusCode.NotFound, retry.StatusCode);
     }
 
@@ -529,9 +562,9 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         Assert.True(createdBody.GetProperty("passwordProtected").GetBoolean());
         var metadata = await client.GetFromJsonAsync<JsonElement>($"/api/v1/secrets/{id}");
         Assert.True(metadata.GetProperty("passwordProtected").GetBoolean());
-        Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsync($"/api/v1/secrets/{id}/open", null)).StatusCode);
-        Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsJsonAsync($"/api/v1/secrets/{id}/unlock", new { password = "wrong horse" })).StatusCode);
-        var unlocked = await client.PostAsJsonAsync($"/api/v1/secrets/{id}/unlock", new { password = "correct horse" });
+        Assert.Equal(HttpStatusCode.Forbidden, (await CreateProofTestHelper.OpenAsync(client, id!)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await CreateProofTestHelper.UnlockAsync(client, id!, new { password = "wrong horse" })).StatusCode);
+        var unlocked = await CreateProofTestHelper.UnlockAsync(client, id!, new { password = "correct horse" });
         Assert.Equal(HttpStatusCode.OK, unlocked.StatusCode);
         Assert.Contains("AAAAAAAAAAAAAAAAAAAAAAA", await unlocked.Content.ReadAsStringAsync());
     }
@@ -560,18 +593,18 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
 
-        using var wrongPassword = await client.PostAsJsonAsync($"/api/v1/secrets/{id}/unlock", new { password = "wrong horse" });
+        using var wrongPassword = await CreateProofTestHelper.UnlockAsync(client, id, new { password = "wrong horse" });
         Assert.Equal(HttpStatusCode.Forbidden, wrongPassword.StatusCode);
         var stillAvailable = await client.GetFromJsonAsync<JsonElement>($"/api/v1/secrets/{id}");
         Assert.False(stillAvailable.GetProperty("oneTimeOpened").GetBoolean());
 
-        using var unlocked = await client.PostAsJsonAsync($"/api/v1/secrets/{id}/unlock", new { password = "correct horse" });
+        using var unlocked = await CreateProofTestHelper.UnlockAsync(client, id, new { password = "correct horse" });
         Assert.Equal(HttpStatusCode.OK, unlocked.StatusCode);
         var body = await unlocked.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Single(body.GetProperty("files").EnumerateArray());
         Assert.Equal(fileId, body.GetProperty("files")[0].GetProperty("id").GetString());
 
-        using var replay = await client.PostAsJsonAsync($"/api/v1/secrets/{id}/unlock", new { password = "correct horse" });
+        using var replay = await CreateProofTestHelper.UnlockAsync(client, id, new { password = "correct horse" });
         Assert.Equal(HttpStatusCode.NotFound, replay.StatusCode);
 
         using var messageOnlyCreated = await CreateProofTestHelper.CreateAsync(client, new
@@ -585,7 +618,7 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         });
         Assert.Equal(HttpStatusCode.Created, messageOnlyCreated.StatusCode);
         var messageOnlyId = (await messageOnlyCreated.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
-        using var messageOnlyOpen = await client.PostAsJsonAsync($"/api/v1/secrets/{messageOnlyId}/unlock", new { password = "correct horse" });
+        using var messageOnlyOpen = await CreateProofTestHelper.UnlockAsync(client, messageOnlyId, new { password = "correct horse" });
         Assert.Equal(HttpStatusCode.OK, messageOnlyOpen.StatusCode);
         var messageOnlyBody = await messageOnlyOpen.Content.ReadFromJsonAsync<JsonElement>();
         Assert.NotEqual(JsonValueKind.Null, messageOnlyBody.GetProperty("message").ValueKind);
@@ -609,14 +642,14 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString();
 
-        var firstWrongPassword = await client.PostAsJsonAsync($"/api/v1/secrets/{id}/unlock", new { password = "wrong horse" });
+        var firstWrongPassword = await CreateProofTestHelper.UnlockAsync(client, id!, new { password = "wrong horse" });
         Assert.Equal(HttpStatusCode.Forbidden, firstWrongPassword.StatusCode);
-        var secondWrongPassword = await client.PostAsJsonAsync($"/api/v1/secrets/{id}/unlock", new { password = "wrong horse" });
+        var secondWrongPassword = await CreateProofTestHelper.UnlockAsync(client, id!, new { password = "wrong horse" });
 
         Assert.Equal(HttpStatusCode.TooManyRequests, secondWrongPassword.StatusCode);
         Assert.True(secondWrongPassword.Headers.RetryAfter?.Delta > TimeSpan.Zero);
         Assert.Contains("rate_limited", await secondWrongPassword.Content.ReadAsStringAsync());
-        Assert.Equal(HttpStatusCode.TooManyRequests, (await client.PostAsJsonAsync($"/api/v1/secrets/{id}/unlock", new { password = "correct horse" })).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await CreateProofTestHelper.UnlockAsync(client, id!, new { password = "correct horse" })).StatusCode);
     }
 
     [Fact]
@@ -642,7 +675,7 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         Assert.Equal(1, metadata.GetProperty("fileCount").GetInt32());
         Assert.Empty(metadata.GetProperty("files").EnumerateArray());
 
-        var unlocked = await client.PostAsJsonAsync($"/api/v1/secrets/{id}/unlock", new { password = "1234" });
+        var unlocked = await CreateProofTestHelper.UnlockAsync(client, id!, new { password = "1234" });
         Assert.Equal(HttpStatusCode.OK, unlocked.StatusCode);
         var unlockedBody = JsonDocument.Parse(await unlocked.Content.ReadAsStringAsync()).RootElement;
         Assert.Equal(".txt", unlockedBody.GetProperty("files")[0].GetProperty("extension").GetString());
@@ -763,8 +796,8 @@ public sealed class SecretFlowTests : IClassFixture<TestApiFactory>
         var created = await CreateProofTestHelper.CreateAsync(client, payload);
         var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString();
 
-        Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsJsonAsync($"/api/v1/secrets/{id}/unlock", new { password = "wrong horse" })).StatusCode);
-        var limited = await client.PostAsJsonAsync($"/api/v1/secrets/{id}/unlock", new { password = "wrong horse" });
+        Assert.Equal(HttpStatusCode.Forbidden, (await CreateProofTestHelper.UnlockAsync(client, id!, new { password = "wrong horse" })).StatusCode);
+        var limited = await CreateProofTestHelper.UnlockAsync(client, id!, new { password = "wrong horse" });
         Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
         Assert.Equal("{\"code\":\"rate_limited\"}", await limited.Content.ReadAsStringAsync());
     }

@@ -34,6 +34,9 @@ async function request(path, method = 'GET', value, extraHeaders = {}) {
   const options = { method, headers: { ...extraHeaders }, redirect: 'manual' };
   if (method === 'POST' && path === '/api/v1/secrets' && !options.headers['X-PrivacyLink-Proof'])
     options.headers['X-PrivacyLink-Proof'] = await createProofHeader();
+  const openRoute = method === 'POST' && /^\/api\/v1\/secrets\/([A-Za-z0-9_-]{22})\/(open|unlock)$/.exec(path);
+  if (openRoute && !options.headers['X-PrivacyLink-Proof'])
+    options.headers['X-PrivacyLink-Proof'] = await openProofHeader(openRoute[1], openRoute[2]);
   if (value !== undefined) {
     options.headers['content-type'] = 'application/json';
     options.body = JSON.stringify(value);
@@ -44,6 +47,25 @@ async function request(path, method = 'GET', value, extraHeaders = {}) {
   let json;
   try { json = raw ? JSON.parse(raw) : undefined; } catch { throw new Error(`Non-JSON response: HTTP ${response.status}`); }
   return { response, json, raw };
+}
+
+async function openProofHeader(secretId, action) {
+  const challengeResponse = await fetch(new URL(`/api/v1/secrets/${secretId}/${action}-challenge`, base), { cache: 'no-store', redirect: 'manual' });
+  headers(challengeResponse);
+  if (!challengeResponse.ok) throw new Error(`Open challenge request failed: HTTP ${challengeResponse.status}`);
+  const challenge = await challengeResponse.json();
+  for (let counter = 0n; counter <= 0xffffffffffffffffn; counter++) {
+    const digest = createHash('sha256').update(`PrivacyLink-Open-PoW-v1:${challenge.challengeId}:${secretId}:${action}:${challenge.nonce}:${counter}`).digest();
+    let zeros = 0;
+    for (const byte of digest) {
+      if (byte === 0) { zeros += 8; continue; }
+      zeros += Math.clz32(byte) - 24;
+      break;
+    }
+    if (zeros >= challenge.difficultyBits)
+      return `${challenge.challengeId}.${challenge.nonce}.${challenge.difficultyBits}.${challenge.expiresAt}.${challenge.signature}.${counter}`;
+  }
+  throw new Error('Open proof counter exhausted');
 }
 
 async function createProofHeader() {

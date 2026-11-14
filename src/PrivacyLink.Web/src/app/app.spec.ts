@@ -12,6 +12,7 @@ import { LinkSharingState } from './link-sharing-state';
 import { RecipientState } from './recipient/recipient-state';
 import { RecipientPage } from './recipient/recipient-page';
 import { SecretApi, SecretApiError } from './secret-api';
+import { WorkProgressState } from './work-progress-state';
 import { SECRET_HISTORY_STORAGE, SecretHistoryStore } from './secret-history-store';
 import { installTestWebLocks } from '../../test-utils/web-locks';
 import { MemoryHistoryStorage } from '../../test-utils/memory-history-storage';
@@ -75,6 +76,7 @@ function createSecretApiStub() {
     createSerialized: vi.fn((_body: ArrayBuffer) => Promise.resolve({ id: 'AAAAAAAAAAAAAAAAAAAAAA', expiresAt: '2030-01-01T00:00:00.000Z', passwordProtected: false, revokeToken: 'test-revoke-token' })),
     revoke: vi.fn().mockResolvedValue(undefined),
     getMetadata: vi.fn().mockResolvedValue({ exists: true, protocolVersion: 1, expiresAt: '2030-01-01T00:00:00.000Z', passwordProtected: false, hasMessage: true, fileCount: 0, files: [] }),
+    getOpenProof: vi.fn().mockResolvedValue('open-proof'),
     requestEmailCode: vi.fn().mockResolvedValue({ code: 'verification_requested' }),
     verifyEmailCode: vi.fn().mockResolvedValue(undefined),
     open: vi.fn(),
@@ -270,9 +272,29 @@ describe('App', () => {
     await recipient.open();
     fixture.detectChanges();
 
-    expect(api.openRaw).toHaveBeenCalledWith(id);
+    expect(api.openRaw).toHaveBeenCalledWith(id, 'open-proof');
     expect(api.open).not.toHaveBeenCalled();
     expect(recipient.openedMessage()).toBe('Worker opened this message');
+    expect(recipient.opened()).toBe(true);
+  });
+
+  it('shows the existing preparing progress while a recipient proof is pending', async () => {
+    const encrypted = await encryptMessage('Prepared recipient proof');
+    const id = 'AAAAAAAAAAAAAAAAAAAAAA';
+    let resolveProof!: (proof: string) => void;
+    api.getOpenProof.mockReturnValueOnce(new Promise<string>(resolve => { resolveProof = resolve; }));
+    api.openRaw.mockResolvedValue(new TextEncoder().encode(JSON.stringify({ protocolVersion: 1, message: encrypted.message, files: [] })).buffer);
+    const fixture = await renderApp(`/s/${id}#${encrypted.clientKey}`);
+    const recipient = fixture.debugElement.query(By.directive(RecipientPage)).injector.get(RecipientState);
+    const progress = TestBed.inject(WorkProgressState);
+    await vi.waitFor(() => expect(recipient.metadataReady()).toBe(true));
+
+    const opening = recipient.open();
+    expect(progress.stage()).toBe('preparing');
+    resolveProof('open-proof');
+    await opening;
+
+    expect(progress.active()).toBe(false);
     expect(recipient.opened()).toBe(true);
   });
 

@@ -13,9 +13,13 @@ internal static class PrivacyAudit
     internal const string ErrorCodeItem = "PrivacyLink.SecretRequestErrorCode";
 
     public static bool IsAudited(HttpRequest request) =>
-        !(HttpMethods.IsGet(request.Method) && request.Path.Equals("/api/v1/secrets/create-challenge", StringComparison.OrdinalIgnoreCase)) &&
+        !(HttpMethods.IsGet(request.Method) && IsChallengePath(request.Path)) &&
         request.Path.StartsWithSegments("/api/v1/secrets") &&
         (HttpMethods.IsPost(request.Method) || HttpMethods.IsGet(request.Method));
+
+    public static bool IsChallengePath(PathString path) =>
+        path.Equals("/api/v1/secrets/create-challenge", StringComparison.OrdinalIgnoreCase) ||
+        path.Value?.EndsWith("-challenge", StringComparison.OrdinalIgnoreCase) == true;
 
     public static string Operation(HttpRequest request)
     {

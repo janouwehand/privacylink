@@ -2,7 +2,7 @@ namespace PrivacyLink.Services;
 
 public interface ICreateProofReplayStore
 {
-    Task<CreateProofConsumeResult> TryConsumeAsync(string challengeId, DateTimeOffset expiresAt, DateTimeOffset now, CancellationToken cancellationToken);
+    Task<CreateProofConsumeResult> TryConsumeAsync(string scope, string challengeId, DateTimeOffset expiresAt, DateTimeOffset now, CancellationToken cancellationToken);
 }
 
 public enum CreateProofConsumeResult { Consumed, Replay, Full }
