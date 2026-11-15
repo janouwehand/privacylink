@@ -1,6 +1,8 @@
 # Specificatie: audit van secretrequests
 
-Datum: 11 oktober 2026. Status: klaar voor implementatie; nog niet geïmplementeerd.
+Status: geïmplementeerd in migratie 7; de huidige repository is gecontroleerd op 15 november 2026.
+
+Specificatie opgesteld: 11 oktober 2026.
 
 ## Doel en scope
 

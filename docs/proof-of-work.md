@@ -12,7 +12,7 @@ Dit is een extra drempel tegen eenvoudige bots. Het is geen authenticatie, geen 
 
 - Proof of work is vereist voor iedere create-aanvraag, ook wanneer die verder ongeldig zou zijn.
 - De eis geldt voor zowel JSON-aanvragen als de bestaande geserialiseerde aanvraag voor uploads.
-- Deze specificatie geldt alleen voor `POST /api/v1/secrets`. De ontvangersroutes voor openen en ontsleutelen gebruiken het afzonderlijke open-proof-protocol uit [open-proof-of-work-research.md](open-proof-of-work-research.md).
+- Deze specificatie geldt alleen voor `POST /api/v1/secrets`. De ontvangersroutes voor openen en ontsleutelen gebruiken het afzonderlijke open-proof-protocol; de huidige configuratie en grenzen daarvan staan in het [production runbook](runbook.md).
 - De bestaande browserapp lost de puzzel op. De API blijft voor andere clients bruikbaar als die het proof meesturen.
 - Gebruik geen CAPTCHA, account, cookie of derde-partijservice.
 
