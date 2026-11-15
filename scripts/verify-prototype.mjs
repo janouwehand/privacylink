@@ -4,7 +4,7 @@
 // Uses disposable random content. Never print messages, keys, IDs or full URLs.
 
 import assert from 'node:assert/strict';
-import { createHash, randomBytes, webcrypto } from 'node:crypto';
+import { createHash, createHmac, randomBytes, webcrypto } from 'node:crypto';
 
 const base = new URL(process.argv[2] ?? 'http://localhost:5080');
 if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password || base.search || base.hash) {
@@ -115,8 +115,30 @@ async function decrypt(key, message, overrides = {}) {
   return decoder.decode(plaintext);
 }
 
+async function derivePasswordToken(password, clientKey) {
+  const key = await webcrypto.subtle.importKey('raw', encoder.encode(password), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return b64(new Uint8Array(await webcrypto.subtle.sign('HMAC', key, clientKey)));
+}
+
+async function verifyCompatibilityVectors() {
+  // Fixed values produced independently with Node Web Crypto (AES/HKDF) and node:crypto (HMAC).
+  const clientKey = Uint8Array.from({ length: 32 }, (_, index) => index);
+  const message = {
+    nonce: 'AAECAwQFBgcICQoL',
+    ciphertext: 'eCoRy-1UcSZNzQHtQaxmQL40KbCxBvlruAaU6SbzoDN_avX60k5xeS-dGRsq05J0tT6F-X9WUQ3oCnA'
+  };
+  const key = await derive(clientKey);
+  assert.equal(await decrypt(key, message), 'Compatibility vector: café, e\u0301, 🧪 🔐');
+  const accessCode = 'päss🔐';
+  const expectedToken = 'uTqZqeHaUMYKkSjlyxGC882t8st29B9dXdNOo9PI9vc';
+  assert.equal(await derivePasswordToken(accessCode, clientKey), expectedToken);
+  assert.equal(b64(createHmac('sha256', encoder.encode(accessCode)).update(clientKey).digest()), expectedToken);
+  checks += 3;
+}
+
 async function main() {
-  const secret = `verification-${b64(randomBytes(18))}`;
+  await verifyCompatibilityVectors();
+  const secret = `verification- café-e\u0301-🧪-${b64(randomBytes(18))}`;
   const clientKey = randomBytes(32);
   const nonce = randomBytes(12);
   const key = await derive(clientKey);
@@ -160,6 +182,36 @@ async function main() {
     assert.equal(await decrypt(key, opened.json.message), secret);
     checks += 4;
   }
+
+  const protectedClientKey = randomBytes(32);
+  const protectedNonce = randomBytes(12);
+  const protectedKey = await derive(protectedClientKey);
+  const protectedCiphertext = new Uint8Array(await webcrypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: protectedNonce, additionalData: aad, tagLength: 128 }, protectedKey, encoder.encode(secret)));
+  const accessCode = `create-flow-${b64(randomBytes(12))}`;
+  const passwordToken = await derivePasswordToken(accessCode, protectedClientKey);
+  const protectedCreate = {
+    ...create,
+    message: { nonce: b64(protectedNonce), ciphertext: b64(protectedCiphertext) },
+    password: passwordToken
+  };
+  assert(!JSON.stringify(protectedCreate).includes(accessCode), 'raw access code forwarded');
+  assert.equal(protectedCreate.password, await derivePasswordToken(accessCode, protectedClientKey));
+  checks += 2;
+
+  const protectedCreated = await request('/api/v1/secrets', 'POST', protectedCreate);
+  expectStatus(protectedCreated, 201, 'protected create');
+  assert.equal(protectedCreated.json.passwordProtected, true);
+  const protectedId = protectedCreated.json.id;
+  const lockedOpen = await request(`/api/v1/secrets/${protectedId}/open`, 'POST');
+  expectStatus(lockedOpen, 403, 'protected open before unlock');
+  const unlocked = await request(`/api/v1/secrets/${protectedId}/unlock`, 'POST', { password: passwordToken });
+  expectStatus(unlocked, 200, 'protected unlock with derived token');
+  assert.equal(unlocked.json.protocolVersion, 1);
+  assert.equal(unlocked.json.message.nonce, protectedCreate.message.nonce);
+  assert.equal(unlocked.json.message.ciphertext, protectedCreate.message.ciphertext);
+  assert.equal(await decrypt(protectedKey, unlocked.json.message), secret);
+  checks += 4;
 
   const wrongKey = await derive(randomBytes(32));
   await assert.rejects(decrypt(wrongKey, create.message), 'wrong key accepted');
