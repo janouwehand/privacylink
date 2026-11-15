@@ -59,6 +59,10 @@ async function deriveKey(clientKey: Uint8Array, purpose: Uint8Array = info): Pro
   return crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: salt as BufferSource, info: purpose as BufferSource }, material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
 }
 
+function fileAdditionalData(id: string, extension: string, mimeType: string, size: number): Uint8Array {
+  return new TextEncoder().encode(`privacylink:file:${id}:${extension}:${mimeType}:${size}`);
+}
+
 export async function encryptFile(file: File, clientKey: Uint8Array, onProgress?: FileCryptoProgress): Promise<EncryptedFile> {
   const idBytes = crypto.getRandomValues(new Uint8Array(16));
   const id = encodeBase64Url(idBytes, onProgress);
@@ -72,15 +76,17 @@ export async function encryptFile(file: File, clientKey: Uint8Array, onProgress?
   const nameNonce = crypto.getRandomValues(new Uint8Array(12));
   const nameKey = await deriveKey(clientKey, encoder.encode(`privacylink-filename:${encodedId}:${extension}`));
   onProgress?.('encrypting');
-  const nameCiphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nameNonce, additionalData: encoder.encode(`privacylink:filename:${encodedId}:${extension}`), tagLength: 128 }, nameKey, encoder.encode(stem)));
+  const mimeType = file.type || 'application/octet-stream';
+  const size = file.size;
+  const nameCiphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nameNonce, additionalData: encoder.encode(`privacylink:filename:${encodedId}:${extension}:${mimeType}:${size}`), tagLength: 128 }, nameKey, encoder.encode(stem)));
   const nonce = crypto.getRandomValues(new Uint8Array(12));
   const key = await deriveKey(clientKey, new TextEncoder().encode(`privacylink-file:${id}`));
   const plaintext = await file.arrayBuffer();
-  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: encoder.encode(`privacylink:file:${id}:${extension}`), tagLength: 128 }, key, plaintext));
-  return { id, extension, nameNonce: encodeBase64Url(nameNonce, onProgress), nameCiphertext: encodeBase64Url(nameCiphertext, onProgress), mimeType: file.type || 'application/octet-stream', size: file.size, nonce: encodeBase64Url(nonce, onProgress), ciphertext: encodeBase64Url(ciphertext, onProgress) };
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: fileAdditionalData(id, extension, mimeType, size) as BufferSource, tagLength: 128 }, key, plaintext));
+  return { id, extension, nameNonce: encodeBase64Url(nameNonce, onProgress), nameCiphertext: encodeBase64Url(nameCiphertext, onProgress), mimeType, size, nonce: encodeBase64Url(nonce, onProgress), ciphertext: encodeBase64Url(ciphertext, onProgress) };
 }
 
-export async function decryptFile(payload: { id: string; extension: string; nonce: string; ciphertext: string }, clientKey: string, onProgress?: FileCryptoProgress): Promise<Uint8Array> {
+export async function decryptFile(payload: Pick<EncryptedFile, 'id' | 'extension' | 'mimeType' | 'size' | 'nonce' | 'ciphertext'>, clientKey: string, onProgress?: FileCryptoProgress): Promise<Uint8Array> {
   const idBytes = decodeCanonical(payload.id, 16, onProgress);
   const id = encodeBase64Url(idBytes);
   if (!/^\.[a-z0-9]{1,15}$/.test(payload.extension)) throw new Error('invalid extension');
@@ -88,7 +94,7 @@ export async function decryptFile(payload: { id: string; extension: string; nonc
   const nonce = decodeCanonical(payload.nonce, 12, onProgress);
   const ciphertext = decodeCanonical(payload.ciphertext, undefined, onProgress);
   onProgress?.('decrypting');
-  const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: nonce as BufferSource, additionalData: new TextEncoder().encode(`privacylink:file:${id}:${payload.extension}`), tagLength: 128 }, key, ciphertext as BufferSource);
+  const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: nonce as BufferSource, additionalData: fileAdditionalData(id, payload.extension, payload.mimeType, payload.size) as BufferSource, tagLength: 128 }, key, ciphertext as BufferSource);
   return new Uint8Array(plaintext);
 }
 
@@ -100,7 +106,7 @@ export async function decryptFileName(metadata: EncryptedFileMetadata, clientKey
   const nonce = decodeCanonical(metadata.nameNonce, 12, onProgress);
   const ciphertext = decodeCanonical(metadata.nameCiphertext, undefined, onProgress);
   onProgress?.('decrypting');
-  const stem = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: nonce as BufferSource, additionalData: encoder.encode(`privacylink:filename:${id}:${metadata.extension}`), tagLength: 128 }, key, ciphertext as BufferSource);
+  const stem = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: nonce as BufferSource, additionalData: encoder.encode(`privacylink:filename:${id}:${metadata.extension}:${metadata.mimeType}:${metadata.size}`), tagLength: 128 }, key, ciphertext as BufferSource);
   const decoded = new TextDecoder('utf-8', { fatal: true }).decode(stem);
   if (decoded.includes('/') || decoded.includes('\\') || decoded.includes(':') || /[\0-\x1f]/.test(decoded) || decoded.endsWith(' ') || decoded.endsWith('.')) throw new Error('invalid filename');
   return `${decoded}${metadata.extension}`;

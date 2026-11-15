@@ -45,7 +45,7 @@ describe('SecretCryptoWorkerClient', () => {
     await expect(operation).resolves.toEqual({ id: 'file-id' });
     expect(onProgress).toHaveBeenCalledWith({ current: 1, total: 1, filename: 'notes.txt', phase: 'encoding' });
 
-    const decrypt = client.decryptFile({ id: 'file-id', extension: '.txt', nonce: 'nonce', ciphertext: 'cipher' }, 'key', onProgress, 'notes.txt');
+    const decrypt = client.decryptFile({ id: 'file-id', extension: '.txt', mimeType: 'text/plain', size: 3, nonce: 'nonce', ciphertext: 'cipher' }, 'key', onProgress, 'notes.txt');
     expect(factory).toHaveBeenCalledOnce();
     worker.emit({ id: 2, type: 'result', result: new Uint8Array([1, 2, 3]) });
     await expect(decrypt).resolves.toEqual(new Uint8Array([1, 2, 3]));
