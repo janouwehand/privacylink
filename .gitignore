@@ -19,3 +19,4 @@ deployment-plan.md
 .tmp-*
 .playwright-mcp/
 graphify-out/
+/src/PrivacyLink.Web/public/security/security-whitepaper.html

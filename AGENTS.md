@@ -15,3 +15,7 @@ Use the five standard triage labels: `needs-triage`, `needs-info`, `ready-for-ag
 ### Domain docs
 
 This is a single-context repository. Read the root `CONTEXT.md` and relevant ADRs under `docs/adr/` when they exist. See `docs/agents/domain.md`.
+
+### Security whitepaper
+
+Keep `docs/security-whitepaper.md` accurate and in sync with relevant changes to the application, its security model, protocol, defaults, and data handling. When making such changes, review and update the whitepaper in the same change, or explicitly explain why no update is needed. Distinguish source-code behavior and defaults from production settings that have not been verified. The Markdown file is the source for the website's technical documentation.
