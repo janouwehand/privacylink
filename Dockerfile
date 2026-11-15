@@ -10,6 +10,8 @@ RUN npm ci --ignore-scripts --no-audit --no-fund
 WORKDIR /workspace
 COPY src/PrivacyLink.Web/ ./src/PrivacyLink.Web/
 COPY src/PrivacyLink.Client/ ./src/PrivacyLink.Client/
+COPY docs/security-whitepaper.md ./docs/security-whitepaper.md
+COPY scripts/render-security-whitepaper.mjs ./scripts/render-security-whitepaper.mjs
 COPY scripts/write-ui-provenance.mjs ./scripts/write-ui-provenance.mjs
 WORKDIR /workspace/src/PrivacyLink.Web
 RUN APP_VERSION="$APP_VERSION" node -e "require('node:fs').writeFileSync('src/app/app-version.ts', 'export const APP_VERSION = ' + JSON.stringify(process.env.APP_VERSION) + ';\\n')" \

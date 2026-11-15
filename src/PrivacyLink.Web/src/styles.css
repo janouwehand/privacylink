@@ -320,6 +320,17 @@ h2 { font-size: 18px; margin: 0 0 26px; }
 .security-engineering-section p { margin: 0 0 10px; }
 .security-engineering-section ul { margin: 8px 0 0; padding-left: 22px; }
 .security-engineering-section li + li { margin-top: 6px; }
+.security-whitepaper-content { color: #4f5961; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+.security-whitepaper-content h2 { margin: 30px 0 10px; color: #202b34; font-size: 22px; line-height: 1.3; }
+.security-whitepaper-content h3 { margin: 22px 0 8px; color: #202b34; font-size: 17px; line-height: 1.35; }
+.security-whitepaper-content p { margin: 0 0 12px; }
+.security-whitepaper-content ul, .security-whitepaper-content ol { margin: 8px 0 16px; padding-left: 24px; }
+.security-whitepaper-content li + li { margin-top: 6px; }
+.security-whitepaper-content a { color: #145d78; text-underline-offset: 3px; }
+.security-whitepaper-content code { padding: 1px 4px; border-radius: 3px; background: #edf0f1; font-size: 0.92em; }
+.security-whitepaper-content table { width: 100%; margin: 12px 0 18px; border-collapse: collapse; text-align: left; }
+.security-whitepaper-content th, .security-whitepaper-content td { padding: 8px 10px; border-bottom: 1px solid #d9dfe1; vertical-align: top; }
+.security-whitepaper-content th { color: #202b34; }
 .security-disclaimer { margin-top: 28px; padding: 16px 18px; border: 1px solid #d9d2b5; background: #fbf8ec; color: #625a3d; font-size: 13px; line-height: 1.6; }
 .security-back-action { display: inline-flex; align-items: center; margin-top: 24px; text-decoration: none; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }

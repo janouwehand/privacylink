@@ -27,11 +27,14 @@ The development server runs at `http://localhost:4200`. Its proxy forwards `/api
 | `/` | Create a secure link and show its result |
 | `/history` | View and manage links stored in this browser |
 | `/security` | Explain the encryption and link protocol |
+| `/securitydetails` | Read the implementation whitepaper rendered from [`docs/security-whitepaper.md`](../../docs/security-whitepaper.md) during the build |
 | `/stats` | Explain that statistics are temporarily unavailable |
 | `/s/:id` | Check a shared link and open its content on user action |
 | Other paths | Show the translated not-found screen |
 
 The result screen is part of `/`; it does not put the client key into Angular route state. The API serves the SPA fallback for deep links. A different static host must also rewrite these application routes to `index.html`.
+
+The whitepaper Markdown is the technical narrative's source of truth. `scripts/render-security-whitepaper.mjs` converts it into a static HTML fragment before `npm start` and `npm run build`; the existing `/securitydetails` route displays that generated fragment. Raw HTML is escaped, links are restricted to this repository on GitHub, and Angular sanitizes the fragment when it is inserted into the page.
 
 ## Translation and link handling
 
